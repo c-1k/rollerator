@@ -1,0 +1,420 @@
+@font-face {
+  font-family: "Cinzel Decorative";
+  src: url("/fonts/CinzelDecorative-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Cinzel";
+  src: url("/fonts/Cinzel.ttf") format("truetype");
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --soot: #0b0907;
+  --iron: #1c1612;
+  --ash: #b9a58a;
+  --ember: #e39a3a;
+  --core: #ffd27a;
+  --rim: rgba(227, 154, 58, 0.35);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  position: fixed;
+  inset: 0;
+  background: var(--soot);
+  color: var(--ash);
+  font-family: "Cormorant Garamond", serif;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+  touch-action: none;
+  user-select: none;
+}
+
+#stage {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
+  background: var(--soot);
+}
+
+.film {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+#die-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+#soot {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background:
+    linear-gradient(to top, rgba(11, 9, 7, 0.78) 0%, rgba(11, 9, 7, 0.12) 22%, transparent 40%),
+    linear-gradient(to bottom, rgba(11, 9, 7, 0.42) 0%, transparent 18%);
+}
+
+#ember {
+  position: absolute;
+  inset: auto 0 0;
+  height: 36%;
+  z-index: 2;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 120%, rgba(227, 154, 58, 0.14), transparent 62%);
+}
+
+#mast {
+  position: absolute;
+  top: max(1.25rem, env(safe-area-inset-top));
+  left: max(1.4rem, env(safe-area-inset-left));
+  z-index: 5;
+  text-shadow: 0 2px 18px #000;
+}
+
+.mast-mark {
+  margin: 0;
+  font-family: "Cinzel Decorative", serif;
+  font-weight: 700;
+  font-size: clamp(1.4rem, 3vw, 2.1rem);
+  letter-spacing: 0.06em;
+  color: var(--core);
+}
+
+.mast-sub {
+  margin: 0.15rem 0 0;
+  font-family: "Cinzel", serif;
+  font-weight: 500;
+  font-size: 0.85rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ash);
+}
+
+#mute {
+  position: absolute;
+  top: max(1.1rem, env(safe-area-inset-top));
+  right: max(1.1rem, env(safe-area-inset-right));
+  z-index: 7;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  color: var(--core);
+  background: rgba(18, 14, 11, 0.55);
+  border: 1px solid var(--rim);
+  cursor: pointer;
+}
+
+#mute svg {
+  width: 22px;
+  height: 22px;
+}
+
+#mute .mute-off,
+#mute[aria-pressed="true"] .mute-on {
+  display: none;
+}
+
+#mute[aria-pressed="true"] .mute-off {
+  display: block;
+}
+
+#mute:hover {
+  filter: brightness(1.08);
+}
+
+#mute:active {
+  transform: scale(0.97);
+}
+
+#dock {
+  position: absolute;
+  z-index: 6;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0 1.2rem max(1.4rem, calc(env(safe-area-inset-bottom) + 0.75rem));
+  pointer-events: none;
+}
+
+#hort {
+  position: relative;
+  z-index: 5;
+  width: min(42rem, 100%);
+  margin: 0;
+  padding: 0.85rem 1.1rem 0.75rem;
+  text-align: center;
+  background: linear-gradient(180deg, rgba(18, 14, 11, 0.82), rgba(11, 9, 7, 0.9));
+  border: 1px solid var(--rim);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
+#hort[hidden] {
+  display: none;
+}
+
+.hort-roll {
+  margin: 0 0 0.35rem;
+  font-family: "Cinzel", serif;
+  font-size: 0.78rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--core);
+}
+
+.hort-line {
+  margin: 0;
+  font-family: "Cormorant Garamond", serif;
+  font-style: italic;
+  font-size: clamp(1.05rem, 2.4vw, 1.35rem);
+  line-height: 1.35;
+  color: #f3e6c8;
+  text-wrap: pretty;
+}
+
+.hort-context {
+  margin: 0.45rem 0 0;
+  font-family: "Cormorant Garamond", serif;
+  font-size: clamp(0.88rem, 1.8vw, 1rem);
+  line-height: 1.4;
+  color: #b9a58a;
+  text-wrap: pretty;
+}
+
+#hort cite {
+  display: block;
+  margin-top: 0.4rem;
+  font-family: "Cinzel", serif;
+  font-style: normal;
+  font-size: 0.68rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ember);
+}
+
+#war-table {
+  position: relative;
+  z-index: 6;
+  display: flex;
+  gap: 0.75rem;
+  align-items: end;
+  padding: 0.85rem 0.95rem;
+  pointer-events: auto;
+  background: linear-gradient(180deg, rgba(28, 22, 18, 0.86), rgba(11, 9, 7, 0.92));
+  border: 1px solid var(--rim);
+  box-shadow:
+    0 0 0 1px #000,
+    0 18px 40px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(255, 210, 122, 0.12);
+}
+
+.plaque {
+  display: grid;
+  gap: 0.28rem;
+  min-width: 11rem;
+}
+
+.plaque span {
+  font-family: "Cinzel", serif;
+  font-size: 0.68rem;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--ember);
+}
+
+select,
+button {
+  font: inherit;
+  color: var(--core);
+  background: #120e0b;
+  border: 1px solid #5a4630;
+  border-radius: 0;
+  min-height: 44px;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+select {
+  appearance: none;
+  padding: 0.65rem 2rem 0.65rem 0.8rem;
+  background-image: linear-gradient(45deg, transparent 50%, var(--ember) 50%),
+    linear-gradient(135deg, var(--ember) 50%, transparent 50%);
+  background-position:
+    calc(100% - 16px) 54%,
+    calc(100% - 11px) 54%;
+  background-size:
+    5px 5px,
+    5px 5px;
+  background-repeat: no-repeat;
+  font-family: "Cinzel", serif;
+  font-size: 0.95rem;
+}
+
+select:focus,
+button:focus-visible {
+  outline: 2px solid var(--ember);
+  outline-offset: 2px;
+}
+
+#roll,
+#share {
+  font-family: "Cinzel Decorative", serif;
+  font-size: 1.15rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  padding: 0.82rem 1.6rem;
+  cursor: pointer;
+  min-width: 8.5rem;
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), filter 0.2s ease;
+}
+
+#roll {
+  color: #1a1008;
+  background: linear-gradient(180deg, #ffd27a, #e39a3a 55%, #9a5a18);
+  border-color: #ffd27a;
+}
+
+#share {
+  color: var(--core);
+  background: #120e0b;
+  border-color: var(--ember);
+}
+
+#roll:hover,
+#share:hover {
+  filter: brightness(1.08);
+}
+
+#roll:active,
+#share:active {
+  transform: scale(0.97);
+}
+
+#roll:disabled,
+#share:disabled {
+  cursor: wait;
+  filter: grayscale(0.35) brightness(0.8);
+}
+
+#share[hidden] {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  #mast {
+    top: max(0.7rem, env(safe-area-inset-top));
+    left: max(0.9rem, env(safe-area-inset-left));
+  }
+
+  .mast-mark {
+    font-size: 1.2rem;
+  }
+
+  .mast-sub {
+    letter-spacing: 0.1em;
+    font-size: 0.72rem;
+  }
+
+  #mute {
+    top: max(0.55rem, env(safe-area-inset-top));
+    right: max(0.55rem, env(safe-area-inset-right));
+  }
+
+  #dock {
+    padding: 0 max(0.7rem, env(safe-area-inset-left)) max(0.7rem, calc(env(safe-area-inset-bottom) + 0.5rem))
+      max(0.7rem, env(safe-area-inset-right));
+    gap: 0.5rem;
+  }
+
+  #war-table {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    padding: 0.7rem;
+  }
+
+  .plaque {
+    flex: 1 1 42%;
+    min-width: 0;
+  }
+
+  #roll,
+  #share {
+    flex: 1 1 calc(50% - 0.3rem);
+    min-width: 0;
+    font-size: 1rem;
+    letter-spacing: 0.14em;
+    padding: 0.75rem 0.8rem;
+  }
+
+  #share[hidden] {
+    display: none;
+  }
+
+  #roll:only-of-type,
+  #roll:has(+ #share[hidden]) {
+    flex: 1 1 100%;
+  }
+
+  #hort {
+    width: 100%;
+    padding: 0.65rem 0.75rem 0.55rem;
+  }
+
+  .hort-line {
+    font-size: 1.02rem;
+  }
+
+  .hort-context {
+    font-size: 0.86rem;
+  }
+}
+
+@media (max-width: 720px) and (max-height: 740px) {
+  .hort-line {
+    font-size: 0.95rem;
+  }
+
+  .hort-context {
+    font-size: 0.8rem;
+  }
+}

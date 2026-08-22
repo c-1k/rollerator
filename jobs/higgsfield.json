@@ -1,0 +1,20 @@
+{
+  "env": {
+    "siege": "a4470a65-b544-4c5b-8ed8-a0cc1bbf98fd",
+    "bog": "d919360b-46ee-4498-8cad-cdd08795c1b9",
+    "forest": "3b5d01a9-0793-4594-82cd-9dc9bb688cc0",
+    "cavern": "2827a1a7-ecd3-49b9-9fd4-8bbfad1a3d3c",
+    "ice": "05822809-d63c-4870-8153-cd04471c3f3b",
+    "volcano": "16a8c1f4-15d8-4f7e-81fb-e9a0ecb5ea94",
+    "hoard": "6e337808-b32c-4373-b5d8-dcb05b4c52d3"
+  },
+  "dice": {
+    "d4": "cf504a79-ebb1-4d66-8670-9047f6ca8327",
+    "d6": "2f0f19db-c891-4756-9284-71908deb4bf0",
+    "d8": "985b8df5-1356-46de-95b9-596a55c740dc",
+    "d10": "0ce5a5ff-1ad4-4f9b-a73d-180e38c4a6e3",
+    "d12": "c0783c29-8b45-4e10-bd53-1bd9694a45dd",
+    "d20": "962c4ffa-16cd-4c9d-8c89-3e7c9e6516a6",
+    "d100": "98ec8e38-8cf4-4caf-978d-bd5fab83c81d"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "The Rollerator: DnD Dice Simulator",
+  "short_name": "Rollerator",
+  "description": "Cinematic polyhedral dice. Pick a world, roll, share the result.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0907",
+  "theme_color": "#0b0907",
+  "icons": [
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ]
+}

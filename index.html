@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1"
+    />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Rollerator" />
+    <meta name="theme-color" content="#0b0907" />
+    <title>The Rollerator: DnD Dice Simulator</title>
+    <meta
+      name="description"
+      content="Cinematic DnD dice. Pick a world, roll a fair d4–d100, and share the result to iMessage."
+    />
+    <link rel="canonical" href="https://rollerator.com/" />
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <link rel="icon" type="image/png" href="/favicon-32.png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="The Rollerator" />
+    <meta property="og:title" content="The Rollerator: DnD Dice Simulator" />
+    <meta
+      property="og:description"
+      content="Pick a world. Roll the die. Share the hit."
+    />
+    <meta property="og:url" content="https://rollerator.com/" />
+    <meta property="og:image" content="https://rollerator.com/og-v3.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="The Rollerator: DnD Dice Simulator" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="The Rollerator: DnD Dice Simulator" />
+    <meta
+      name="twitter:description"
+      content="Pick a world. Roll the die. Share the hit."
+    />
+    <meta name="twitter:image" content="https://rollerator.com/og-v3.jpg" />
+    <link rel="preload" href="/fonts/CinzelDecorative-Bold.ttf" as="font" type="font/ttf" crossorigin />
+    <link rel="preload" href="/fonts/Cinzel.ttf" as="font" type="font/ttf" crossorigin />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;1,500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="stage">
+      <video
+        id="env-film"
+        class="film film-env"
+        playsinline
+        muted
+        preload="auto"
+        poster="public/posters/siege.jpg"
+      ></video>
+      <canvas id="die-stage"></canvas>
+      <div id="soot"></div>
+      <div id="ember"></div>
+
+      <header id="mast">
+        <p class="mast-mark">The Rollerator</p>
+        <p class="mast-sub">DnD Dice Simulator</p>
+      </header>
+      <button type="button" id="mute" aria-pressed="false" aria-label="Mute sound">
+        <svg class="mute-on" viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linejoin="round"
+            d="M3.5 9.5v5h3.2L11 18.2V5.8L6.7 9.5H3.5z"
+          />
+          <path
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            d="M14.2 8.6a4.4 4.4 0 0 1 0 6.8M16.8 6.4a7.6 7.6 0 0 1 0 11.2"
+          />
+        </svg>
+        <svg class="mute-off" viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linejoin="round"
+            d="M3.5 9.5v5h3.2L11 18.2V5.8L6.7 9.5H3.5z"
+          />
+          <path
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            d="M15.2 9.2 20 14.8M20 9.2l-4.8 5.6"
+          />
+        </svg>
+      </button>
+
+      <div id="dock">
+      <blockquote id="hort" hidden>
+        <p class="hort-roll"></p>
+        <p class="hort-line"></p>
+        <p class="hort-context"></p>
+        <cite>Horticulture Williams</cite>
+      </blockquote>
+
+      <form id="war-table" autocomplete="off">
+        <label class="plaque">
+          <span>Environment</span>
+          <select id="environment" name="environment">
+            <option value="siege" selected>Castle siege</option>
+            <option value="bog">Poison bog</option>
+            <option value="forest">Primeval forest</option>
+            <option value="cavern">Deep caverns</option>
+            <option value="ice">Glacial pass</option>
+            <option value="volcano">Caldera</option>
+            <option value="hoard">Dragon hoard</option>
+          </select>
+        </label>
+        <label class="plaque">
+          <span>Die</span>
+          <select id="die" name="die">
+            <option value="d4">d4</option>
+            <option value="d6">d6</option>
+            <option value="d8">d8</option>
+            <option value="d10">d10</option>
+            <option value="d12">d12</option>
+            <option value="d20" selected>d20</option>
+            <option value="d100">d100</option>
+          </select>
+        </label>
+        <button type="submit" id="roll">Roll</button>
+        <button type="button" id="share" hidden>Share</button>
+      </form>
+      </div>
+    </div>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

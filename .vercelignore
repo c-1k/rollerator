@@ -1,0 +1,6 @@
+public/dice
+public/env/src
+public/rolls
+jobs
+*.test.js
+.DS_Store
