@@ -87,10 +87,10 @@ export function polygonIncentre(points2d)             // { c: [u, v], r: inradiu
   distance from it to an edge, so nothing throws.
 
 `projectFaceUVs` projects the face's unique vertices to 2D, calls
-`polygonIncentre`, and maps the incentre to UV `(0.5, 0.5)` with a scale such
-that the **inradius maps to `0.5 × INCIRCLE_UV = 0.42`** — so a 1-digit glyph
-at 23 % of the texture always sits inside the face's incircle with the same
-margin on every die.
+`polygonIncentre`, and maps the incentre to UV `(0.5, 0.5)` and scales so that the
+**inradius maps to a UV radius of `INCIRCLE_UV = 0.42`** (the incircle spans
+84 % of the texture). A 1-digit glyph at 23 % of the texture then always sits
+inside the face's incircle with the same margin on every die.
 
 ### 4.3 Ink centring
 `numberOverlay` measures the label (`measureText` →
