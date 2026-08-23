@@ -168,6 +168,46 @@ export function landedValue(normals, quat, values, worldUp = [0, 1, 0]) {
   return values[i];
 }
 
+/**
+ * Where the camera goes to present a landed die.
+ *
+ * The die is never rotated after it comes to rest. Instead the camera is
+ * placed on a cone of half-angle `tilt` around world-up, at the azimuth that
+ * makes the landed face's numeral read upright on screen.
+ *
+ * `up` is the ground-plane screen-up direction (the projected numeral-up),
+ * NOT world-up: world-up is parallel to the view axis at tilt 0 and makes
+ * lookAt undefined there, while this vector is never parallel to the view
+ * axis for any tilt below 90 degrees and yields the identical screen-up.
+ *
+ * @param texUpWorld  [x,y,z] numeral-up of the landed face, in world space
+ * @param opts.tilt      radians off vertical; 0 = straight overhead
+ * @param opts.distance  camera distance from aim
+ * @param opts.aim       [x,y,z] the point the camera looks at
+ * @param opts.worldUp   [x,y,z], default [0,1,0]
+ * @returns { position: [x,y,z], up: [x,y,z], aim: [x,y,z] }
+ */
+export function revealCamera(texUpWorld, { tilt, distance, aim, worldUp = [0, 1, 0] }) {
+  const n = normalize(worldUp);
+  let s = projectOnPlane(texUpWorld, n);
+  // A face that is itself world-up always has a ground component, but guard
+  // the degenerate input: fall back to today's overhead screen-up (-Z).
+  if (len(s) < 1e-6) s = projectOnPlane([0, 0, -1], n);
+  s = normalize(s);
+  // Numeral-up must point away from the camera, so the camera sits at -s.
+  const horizontal = scale(s, -distance * Math.sin(tilt));
+  const vertical = scale(n, distance * Math.cos(tilt));
+  return {
+    position: [
+      aim[0] + horizontal[0] + vertical[0],
+      aim[1] + horizontal[1] + vertical[1],
+      aim[2] + horizontal[2] + vertical[2],
+    ],
+    up: s,
+    aim: [aim[0], aim[1], aim[2]],
+  };
+}
+
 export const FACE_UV_YAW = {
   d8: (-7.5 * Math.PI) / 180,
   d10: (-6 * Math.PI) / 180,
