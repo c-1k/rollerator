@@ -7,14 +7,25 @@ import { upwardFaceIndex } from "../physics-roll.js";
  * The physics decides the number: the value is read from whichever face
  * points at world-up after the body sleeps. So the ways this app breaks are
  *   1. the roll never terminates (physics never sleeps) -> caught by timeout
- *   2. the die reports a face outside its own range     -> caught by range
+ *   2. the die reports a face outside its own face set  -> caught by legal()
  *   3. the reported value is not the world-up face      -> invariant 2 below
  *   4. the die is re-oriented after it came to rest     -> invariant 3 below
  *   5. something throws mid-flight                      -> caught by console
  * All seven dice share one page load; a cold start costs ~25s under
  * SwiftShader and a roll only ~10s.
  */
-const SIDES = { d4: 4, d6: 6, d8: 8, d10: 10, d12: 12, d20: 20, d100: 100 };
+// d4..d20 show 1..sides. d100 is a percentile TENS die: ten faces labelled
+// 00, 10, ... 90 (formatFace pads the zero face to "00"); its value is the
+// tens digit x 10, so 0..90 in steps of 10.
+const DICE = {
+  d4: { legal: (v) => v >= 1 && v <= 4 },
+  d6: { legal: (v) => v >= 1 && v <= 6 },
+  d8: { legal: (v) => v >= 1 && v <= 8 },
+  d10: { legal: (v) => v >= 1 && v <= 10 },
+  d12: { legal: (v) => v >= 1 && v <= 12 },
+  d20: { legal: (v) => v >= 1 && v <= 20 },
+  d100: { legal: (v) => v >= 0 && v <= 90 && v % 10 === 0 },
+};
 const HORT_ROLL = /^(d\d+)\s+·\s+(\d+)$/;
 
 test("every die rolls to a legal face and reports it", async ({ page }) => {
@@ -33,7 +44,7 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
   await expect(page.locator("#hort")).toBeHidden();
   await expect(page.locator("#share")).toBeHidden();
 
-  for (const [kind, sides] of Object.entries(SIDES)) {
+  for (const kind of Object.keys(DICE)) {
     await test.step(`${kind} lands`, async () => {
       // Changing the die runs setIdle(), which must clear the last result.
       await page.selectOption("#die", kind);
@@ -51,8 +62,10 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
 
       expect(match[1]).toBe(kind);
       const value = Number(match[2]);
-      expect(value, `${kind} rolled below 1`).toBeGreaterThanOrEqual(1);
-      expect(value, `${kind} rolled above ${sides}`).toBeLessThanOrEqual(sides);
+      expect(
+        DICE[kind].legal(value),
+        `${kind} rolled an illegal face: ${text}`,
+      ).toBe(true);
 
       // A landed roll must also offer the quote and the share affordance.
       await expect(page.locator(".hort-line")).not.toBeEmpty();
