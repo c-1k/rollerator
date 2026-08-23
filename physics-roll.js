@@ -134,7 +134,7 @@ export const THROW = {
   // sideways motion and spin: measured at 0.9 u/s and 0.9 rad/s in the frame
   // before contact, 11.7 u/s and 15.8 rad/s in the frame after. That squirt,
   // not the flight, is what used to carry the die to the ring -- it would
-  // then roll outward for 450 ms and cover 2.6 units. It sits at 0.35: low
+  // then roll outward for 450 ms and cover 2.6 units. It sits at 0.3: low
   // enough that the tail after the two authored hops dies inside about half
   // a second, which is the budget those hops leave under the click ceiling,
   // and high enough that what follows them still reads as bouncing rather
@@ -143,8 +143,8 @@ export const THROW = {
   // `restitutionByKind` overrides it for a die that needs its own -- the
   // seven solids do not shed energy alike, a tetrahedron landing on a big
   // flat face dumps roughly twice as much as a d12. Spec section 10 excluded
-  // per-die profiles; amended by ruling 2026-08-23 for this one field. It is
-  // empty: the tuned profile brought all seven inside the bounds without it.
+  // per-die profiles; amended by ruling 2026-08-23 for this one field. Two
+  // dice use it -- see the note on the literal below.
   //
   // `wall` is the ring, and it is deliberately dead: a die that reaches the
   // wall should be absorbed and turned back, not returned. Restitution 0.08
@@ -181,20 +181,6 @@ export const THROW = {
   // hops and the tail, and the centring is bought entirely with `linear`,
   // `firstBounceHold.carry` and the launch position instead.
   damping: { linear: 0.85, angular: 0.86 },
-  // The settle ramp. `damping.angular` is tuned for the flight, where the
-  // tumble is the point; it is too soft for the last stretch, where the die
-  // should look like it is coming to rest. Cam rolled the raised-spin build
-  // and called the die "really spinny" -- measured, that is 2-5 rad/s still
-  // turning through the final 100 ms, and on a d4 a brief 33 rad/s flip as
-  // the tetrahedron slaps onto its face.
-  //
-  // `afterMs` since the last COUNTED floor impact is what says the die has
-  // stopped bouncing and started settling -- it cannot be "after the last
-  // bounce" because nothing knows which bounce was last until the roll is
-  // over. Over `rampMs` the angular damping eases from the flight value to
-  // `angular`, so the tumble bleeds off instead of being frozen. It is a
-  // ramp and not a switch precisely so the die never stops rotating in one
-  // frame, which reads worse than the twirl it replaces.
   sleep: { speedLimit: 0.7, timeLimit: 0.14 },
   // When the silent simulation stops recording, in units/s and rad/s. These
   // are "imperceptible", not "numerically zero", and the difference is most

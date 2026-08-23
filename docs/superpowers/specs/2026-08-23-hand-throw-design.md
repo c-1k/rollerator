@@ -393,24 +393,29 @@ into §4.
 
 ## 9. Acceptance
 
-> **These numbers are superseded by the controller's ruling of 2026-08-23**
-> and are left here for Task 6 to rewrite, which owns this section. The
-> bounds actually enforced are in `scripts/throw-soak.mjs` (`BOUNDS`) and
-> `e2e/roll.spec.js`: median `flightMs` 450–1300, p95 ≤ 1800, `bounces` 1–5
-> in ≥ 90 %, **`apex` ≥ 0.35 in ≥ 80 %**, `wallHits` ≤ 1 in ≥ 80 %,
-> `heldFrames` 0, no landing within `0.82 + 0.3` of a wall, time-to-number
-> ≤ 2200 ms. `bounces` also changed meaning: one impact, not one contact
-> equation, above a 2.2 u/s floor.
+> **The numbers in this section are stale and Task 6 owns rewriting it.**
+> Everything below the quote block predates the cylinder-and-slam pass and
+> several rulings after it; do not read any figure here as shipped.
 >
-> **`apex` is the one bound the shipped profile misses**, and it is the
-> numeric form of this spec's "two or three sharp bounces". A 7 × 20 soak on
-> 2026-08-23 was green on every other bound — medians 504–892, p95 650–1275,
-> `bounces` 1–5 in 95–100 %, no wall touched in 140 rolls, `heldFrames` 0,
-> landings 1.69 / 1.59 against 1.88 / 1.68, click to `#hort` 948–1654 ms —
-> and 0 % on `apex`. §4 has the measured reason and the ways out.
+> **`scripts/throw-soak.mjs` (`BOUNDS`) is the source of truth**, with
+> `e2e/roll.spec.js` holding the single-roll versions. Read them there rather
+> than from a restatement that has now gone stale twice. In outline, as of
+> 2026-08-23: both hops authored and bounded (`bounceHeights`), `bounces`
+> 1–6, `wallHits` ≤ 1, `heldFrames` 0, a radial landing bound read off
+> `debug().arena`, a resting height on the floor, flight median ≤ 1700 and
+> **p95 ≤ 2200**, and click-to-number **≤ 2500 ms**.
 >
-> The visual acceptance below reads the same way: the contact sheet shows
-> one fall and then a die creeping to rest, not a tumble with bounces in it.
+> Two of those carry rulings worth naming. The flight p95 was raised
+> 2000 → 2200 because the click ceiling is the bound that actually binds and
+> a tighter p95 was failing runs whose every click was comfortably inside it.
+> The resting-radius rows are **advisory**: they say whether a result reads
+> as centred, which Cam judges on screen, so the soak reports them and does
+> not fail on them. Containment is the gate; centring is a note.
+>
+> The old text here also claimed `apex` was the one bound the profile missed.
+> That was true of a build two commits before the arena existed. The first
+> bounce is now authored and lands 3.85–4.02 die-heights, the second
+> 1.91–1.99, 100 % in band on all seven dice.
 
 - `pnpm verify` exit 0 with the new assertions.
 - Across the soak (7 dice × 10 rolls): median `flightMs` 900–1700; 95th

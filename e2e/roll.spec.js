@@ -228,6 +228,40 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
   );
 });
 
+/**
+ * The quote card must not land on top of the die. The crane ends close enough
+ * that a dead-centre reveal would put the die behind the card, so the reveal
+ * lifts the die into the upper part of the frame; this is that ruling as a
+ * number. Measured in CSS pixels: the die's projected bottom edge (centre plus
+ * projected radius) against the card's own top edge.
+ *
+ * Checked in BOTH orientations. Portrait is the one that matters most -- it is
+ * framed by its width, so it carries its own `revealLift`, and its card sits
+ * lowest -- and for a while this ran only at 1280x900 because it sat above the
+ * resize that introduces portrait.
+ */
+async function expectDieClearsCard(page, where) {
+  const gap = await page.evaluate(() => {
+    const d = window.__dice.debug();
+    const card = document.querySelector("#hort").getBoundingClientRect();
+    return {
+      bottom: d.dieScreen.y + d.dieScreen.r,
+      top: card.top,
+      vh: d.dieScreen.vh,
+    };
+  });
+  expect(
+    gap.bottom,
+    `${where}: the die reaches ${gap.bottom.toFixed(1)}px and the quote card starts at ${gap.top.toFixed(1)}px — they overlap`,
+  ).toBeLessThan(gap.top);
+  // Not merely non-overlapping: clear by a visible margin, so a slightly
+  // taller quote or a slightly different rest height cannot close the gap.
+  expect(
+    (gap.top - gap.bottom) / gap.vh,
+    `${where}: die-to-card gap is only ${(((gap.top - gap.bottom) / gap.vh) * 100).toFixed(1)}% of the viewport height`,
+  ).toBeGreaterThan(0.04);
+}
+
 test("switching environment clears the previous result; resizing keeps the reveal framed", async ({
   page,
 }) => {
@@ -245,32 +279,7 @@ test("switching environment clears the previous result; resizing keeps the revea
     { timeout: 15_000 },
   );
 
-  // The quote card must not land on top of the die. The crane ends close
-  // enough that a dead-centre reveal would put the die behind the card, so
-  // the reveal lifts the die into the upper part of the frame; this is that
-  // ruling as a number. Measured in CSS pixels: the die's projected bottom
-  // edge (centre plus projected radius) against the card's own top edge.
-  {
-    const gap = await page.evaluate(() => {
-      const d = window.__dice.debug();
-      const card = document.querySelector("#hort").getBoundingClientRect();
-      return {
-        bottom: d.dieScreen.y + d.dieScreen.r,
-        top: card.top,
-        vh: d.dieScreen.vh,
-      };
-    });
-    expect(
-      gap.bottom,
-      `the die reaches ${gap.bottom.toFixed(1)}px and the quote card starts at ${gap.top.toFixed(1)}px — they overlap`,
-    ).toBeLessThan(gap.top);
-    // Not merely non-overlapping: clear by a visible margin, so a slightly
-    // taller quote or a slightly different rest height cannot close the gap.
-    expect(
-      (gap.top - gap.bottom) / gap.vh,
-      `die-to-card gap is only ${(((gap.top - gap.bottom) / gap.vh) * 100).toFixed(1)}% of the viewport height`,
-    ).toBeGreaterThan(0.04);
-  }
+  await expectDieClearsCard(page, "landscape 1280x900");
 
   // Invariant 4: the result stays presented across a resize. The die keeps its
   // physics rest pose, so the camera -- not the die -- has to re-frame for the
@@ -290,6 +299,10 @@ test("switching environment clears the previous result; resizing keeps the revea
   );
   const d = await page.evaluate(() => window.__dice.debug());
   expect(d.phase, "the invariant reads must land post-finish").toBe("idle");
+  // Portrait carries its own revealLift and its card sits lowest, so the
+  // clearance has to hold here too -- this is the orientation whose framing
+  // actually changed.
+  await expectDieClearsCard(page, "portrait 800x1000");
   expect(
     d.reveal,
     "a presented result must still carry its reveal",

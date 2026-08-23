@@ -77,7 +77,10 @@ const BOUNDS = {
   // The first hop alone costs ~0.65 s, so the band moved up; the p95 and the
   // click-to-number ceiling are what stop the tail from spending it twice.
   medianFlightMs: [450, 1700],
-  p95FlightMs: 2000,
+  // 2200 by ruling of 2026-08-23, not 2000: the click-to-number ceiling
+  // (`timeToNumberMs`) is the bound that actually binds, and a p95 tighter
+  // than it was failing runs whose every click was comfortably inside.
+  p95FlightMs: 2200,
   bounces: [1, 6],
   bounceShare: 0.9,
   // Both hops are AUTHORED at THROW.bounceHeights die-heights, so
@@ -257,6 +260,9 @@ try {
   }
 
   const failures = [];
+  // Reported, never fatal. Advisory rows are the ones the ruling made a
+  // matter of judgement rather than a gate.
+  const advisories = [];
   const rows = [];
 
   for (const kind of DICE) {
@@ -434,13 +440,16 @@ try {
       );
     if (maxR > clearR)
       fail(`landed ${round(maxR - clearR)} past the radial landing bound`);
-    if (medR > BOUNDS.restRadiusMedian)
-      fail(
-        `median resting radius ${round(medR)} > ${BOUNDS.restRadiusMedian} ` +
-          `-- results are not reading as centred`,
+    // The resting-radius numbers are ADVISORY by ruling: they say whether the
+    // result reads as centred, which is a matter of taste that Cam judges on
+    // screen, not a bound a run should die on. They are printed below with
+    // their targets either way. Containment -- `clearR` above -- is the gate.
+    if (medR > BOUNDS.restRadiusMedian || p95R > BOUNDS.restRadiusP95) {
+      advisories.push(
+        `${kind}: resting radius med ${round(medR)} / p95 ${round(p95R)} ` +
+          `against ${BOUNDS.restRadiusMedian} / ${BOUNDS.restRadiusP95}`,
       );
-    if (p95R > BOUNDS.restRadiusP95)
-      fail(`p95 resting radius ${round(p95R)} > ${BOUNDS.restRadiusP95}`);
+    }
     // The raw wall clock, and nothing else. It used to need correcting for
     // renderer speed because the replay advanced by tick's clamped dt and so
     // ran slow on a slow renderer; the replay now reads the wall clock
@@ -507,6 +516,10 @@ try {
     failures.push(`${problems.length} console error(s) during the soak`);
   }
 
+  if (advisories.length) {
+    console.log(`\n  advisory -- ${advisories.length} row(s) outside target:`);
+    for (const a of advisories) console.log(`    ~ ${a}`);
+  }
   if (failures.length) {
     console.log(`\n  FAIL -- ${failures.length} bound(s) missed:`);
     for (const f of failures) console.log(`    - ${f}`);
