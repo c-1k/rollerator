@@ -48,7 +48,7 @@ never collides.
 |---|---|
 | `scripts/dev-server.mjs` | Zero-dependency static server. Mirrors `cleanUrls` and answers Range requests. |
 | `scripts/roll-shot.mjs` | Rolls a die in a real browser and writes `.artifacts/roll-<die>-<env>.png`. How an agent looks at its own work. |
-| `scripts/throw-soak.mjs` | Rolls every die N times and holds the distribution of `flightMs`, `bounces`, `wallHits`, `heldFrames` and the landing spread against the hand-throw spec's acceptance. `--fast` reads the silent simulation and skips the replay (~0.01s a roll, for tuning); full mode is the only one that measures `heldFrames` and the click-to-number time, and says so. |
+| `scripts/throw-soak.mjs` | Rolls every die N times and holds the distribution of `flightMs`, `bounces`, `apex` (how far it rises off its first bounce), `wallHits`, `heldFrames` and the landing spread against the hand-throw spec's acceptance. `--fast` reads the silent simulation and skips the replay (~0.01s a roll, for tuning); full mode is the only one that measures `heldFrames` and the click-to-number time, and says so. |
 | `scripts/roll-strip.mjs` | A contact sheet of one throw: eight frames across the flight into `.artifacts/roll-strip-<die>-<env>.png`, plus each frame, the settled result, and the die's height trace. Frames are copied in-page, not screenshotted — see the header for the measurements that forced that. |
 | `playwright.config.js` | Chromium with SwiftShader flags — headless WebGL is blank without them. |
 | `biome.jsonc` | Lint and format. Carries a documented temporary exclusion for the files under active rewrite. |

@@ -17,11 +17,14 @@
  * Two limits bound how far `tray` can grow, both checked at 3.0 x 2.8:
  *   - The flight camera (dropCam 13.6 up, DROP_FOV 54 vertical) sees +-6.93
  *     in z and +-9.86 in x, so the tray must stay inside that or a die can
- *     land off screen.
- *   - The shadow-catcher disc has radius 3.4. It no longer reaches the tray's
- *     corners (hypot(3.0, 2.8) = 4.10), which is fine, but it must still
- *     cover every position the die can REST in -- landing clearance keeps its
- *     centre inside hypot(3.0 - 1.12, 2.8 - 1.12) = 2.94.
+ *     land off screen. There is room here for a tray half again this size.
+ *   - The shadow-catcher disc has radius 3.4. It does not reach the tray's
+ *     corners (hypot(3.0, 2.8) = 4.10), which is fine -- it is not scenery,
+ *     it only has to be under the die wherever the die can STOP. Landing
+ *     clearance (0.82 + 0.3) keeps the centre inside
+ *     hypot(3.0 - 1.12, 2.8 - 1.12) = 2.52, and the shadow reaches the die's
+ *     own 0.82 past that, so 3.34 is what must be covered: 0.06 to spare.
+ *     Growing the tray means growing the disc with it.
  *
  * Values are the tuned result of the soak in the plan's Task 5.
  */

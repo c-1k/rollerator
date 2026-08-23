@@ -75,15 +75,19 @@ circumradius is 0.82, so it is ~1.6 units across, not 0.72.
 The camera looks at the die, so **wherever the die lands it is centred on
 screen after the crane**; "stays where it lands" is about the motion (no
 glide), not the final composition. The blob shadow follows the die. The
-shadow-catcher disc (radius 3.4) no longer reaches the tray's corners
-(`hypot(3.0, 2.8) = 4.10`), but it covers every position the die can actually
-rest in: clearance keeps its centre inside `hypot(2.18, 1.98) = 2.94`. The
-flight camera (13.6 up, 54° vertical) sees ±6.93 in z and ±9.86 in x, so the
-larger tray is still comfortably in frame.
+shadow-catcher disc (radius 3.4) does not reach the tray's corners
+(`hypot(3.0, 2.8) = 4.10`) and does not need to — it is not scenery, it only
+has to be under the die wherever the die can *stop*. Landing clearance
+(`0.82 + 0.3`) keeps the centre inside `hypot(1.88, 1.68) = 2.52`, and the
+shadow reaches the die's own 0.82 past that, so what must be covered is 3.34:
+0.06 to spare. **A bigger tray needs a bigger disc**, and the arithmetic is
+in `physics-roll.js` beside `tray`. The flight camera (13.6 up, 54° vertical)
+sees ±6.93 in z and ±9.86 in x, so the tray could grow by half again before
+the camera, rather than the disc, became the binding constraint.
 
 ## 4. The throw — a profile in `physics-roll.js`
 
-These are the tuned values (soak of 7 × 10 rolls, 2026-08-23). All tunables
+These are the tuned values (soak of 7 × 20 rolls, 2026-08-23). All tunables
 live in one exported, pure profile so they can be unit-tested and tuned in
 one place:
 
@@ -137,6 +141,33 @@ lifts d4's median pushes the round dice past the landing bound: at
 `restitution` 0.44 d4 reaches 637 ms and two dice lose their landing bound and
 d20 its bounce share. The profile above is the balance point; §9's median floor
 of 450 is set by d4 and nothing else.
+
+**A bounce you can see and a bounce budget of five are mutually exclusive
+here, and this profile chooses the budget.** `apex` (§7) measures how far the
+die rises off its first counted bounce. The acceptance asks for ≥ 0.35 —
+about a fifth of the die's 1.6-unit width — in ≥ 80 % of rolls. This profile
+scores **0 % on all seven dice**, median rises 0.00–0.13. It was not accepted
+without a search: the tray was grown to 4.0 × 3.6 (shadow disc to 5.0) and
+restitution swept 0.45–0.60, then launch height to the 2.95 that §8's
+`y < 3` test allows. The two bounds move in exact opposition, because every
+rebound big enough to see is another contact above the 2.2 u/s floor and so
+another counted bounce:
+
+| profile (tray 4.0 × 3.6, N = 20 × 7 dice) | `apex` ≥ 0.35 | `bounces` 1–5 |
+|---|---|---|
+| restitution 0.28 (shipped) | 0 % | 100 % |
+| restitution 0.45 | 0–10 % | 70–100 % |
+| restitution 0.60 | 0–50 % | 20–95 % |
+| launch `y` 2.4–2.85, restitution 0.60 | 40–90 % | 10–100 % |
+| launch `y` 2.85–2.95, restitution 0.60, friction 0.45 | 60–90 % | 5–80 % |
+
+The corner that comes closest to the apex bound also lands every die outside
+the tray and puts d12's median flight at 1425 ms. So the tray went back to
+3.0 × 2.8 and the disc to 3.4, and `apex` ships as a measured, enforced bound
+that this profile **misses** — the soak exits 1 on it and on nothing else.
+Closing it needs a decision that is not a `THROW` value: relax the bounce cap,
+raise `bounceSpeed` so one rebound chain stops counting as five bounces, or
+shrink the die relative to its tray.
 
 **`rest` is the lever that ends a throw.** At 0.002/0.006 the silent
 simulation runs until the die is genuinely still, which is worth 100–275 ms per
@@ -215,6 +246,7 @@ dead if nothing else reaches it.
 | `flightMs` | silent-sim duration to rest (frames × `physStep` × 1000) |
 | `bounces` | floor contacts during the silent sim with a downward impact speed > 0.8 u/s (counted via a `collide` listener on the die body during `simulateTrajectory`, removed after) |
 | `wallHits` | same, for the four wall bodies |
+| `apex` | how far the body centre **rises** off the first counted bounce, in world units against a die ~1.6 across. `bounces` says a bounce happened; only this says whether you can see it. Added 2026-08-23 because a profile scoring 100 % on the bounce count still read as drop-tumble-settle, its rebounds being 0.21 units — 13 % of a die |
 | `heldFrames` | number of render ticks during `flight` where the interpolated pose was identical to the previous tick while `replayT` advanced — **must be 0**; this is the "vibration" detector |
 | `craneMs`, `holdMs` | the constants, so tests read them rather than hardcode |
 
@@ -262,9 +294,20 @@ into §4.
 > and are left here for Task 6 to rewrite, which owns this section. The
 > bounds actually enforced are in `scripts/throw-soak.mjs` (`BOUNDS`) and
 > `e2e/roll.spec.js`: median `flightMs` 450–1300, p95 ≤ 1800, `bounces` 1–5
-> in ≥ 90 %, `wallHits` ≤ 1 in ≥ 80 %, `heldFrames` 0, no landing within
-> `0.82 + 0.3` of a wall, time-to-number ≤ 2200 ms. `bounces` also changed
-> meaning: one impact, not one contact equation, above a 2.2 u/s floor.
+> in ≥ 90 %, **`apex` ≥ 0.35 in ≥ 80 %**, `wallHits` ≤ 1 in ≥ 80 %,
+> `heldFrames` 0, no landing within `0.82 + 0.3` of a wall, time-to-number
+> ≤ 2200 ms. `bounces` also changed meaning: one impact, not one contact
+> equation, above a 2.2 u/s floor.
+>
+> **`apex` is the one bound the shipped profile misses**, and it is the
+> numeric form of this spec's "two or three sharp bounces". A 7 × 20 soak on
+> 2026-08-23 was green on every other bound — medians 504–892, p95 650–1275,
+> `bounces` 1–5 in 95–100 %, no wall touched in 140 rolls, `heldFrames` 0,
+> landings 1.69 / 1.59 against 1.88 / 1.68, click to `#hort` 948–1654 ms —
+> and 0 % on `apex`. §4 has the measured reason and the ways out.
+>
+> The visual acceptance below reads the same way: the contact sheet shows
+> one fall and then a die creeping to rest, not a tumble with bounces in it.
 
 - `pnpm verify` exit 0 with the new assertions.
 - Across the soak (7 dice × 10 rolls): median `flightMs` 900–1700; 95th

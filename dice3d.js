@@ -1030,6 +1030,10 @@ export function createDiceStage(canvas, video) {
   ];
   addPlane([0, -1, 0], 0, 9.4, 0);
 
+  // The shadow catcher. Not scenery: it does not have to reach the tray's
+  // corners, it has to be under the die wherever the die can STOP, plus the
+  // die's own 0.82 of shadow. At THROW.tray 3.0 x 2.8 that is 3.34 and this
+  // is 3.4. Grow it with the tray -- the arithmetic is in physics-roll.js.
   const catcher = new THREE.Mesh(
     new THREE.CircleGeometry(3.4, 48),
     new THREE.ShadowMaterial({ color: 0x000000, opacity: 0.42 })
@@ -1457,6 +1461,7 @@ export function createDiceStage(canvas, video) {
       flightMs: st.metrics?.flightMs ?? null,
       bounces: st.metrics?.bounces ?? null,
       wallHits: st.metrics?.wallHits ?? null,
+      apex: st.metrics?.apex ?? null,
       heldFrames: 0,
     };
     // Where the die came to rest, with the height for THIS pose (the old code
@@ -1656,12 +1661,13 @@ export function createDiceStage(canvas, video) {
 
   /**
    * Run the throw to rest without rendering, recording every physics step.
-   * Also counts floor bounces and wall hits via the die's collide events;
-   * the listener is attached only for the duration of the sim.
+   * Also counts floor bounces and wall hits via the die's collide events,
+   * and measures the height of the first rebound; the listener is attached
+   * only for the duration of the sim.
    */
   function simulateTrajectory() {
     const frames = [readFrame()];
-    const metrics = { flightMs: 0, bounces: 0, wallHits: 0 };
+    const metrics = { flightMs: 0, bounces: 0, wallHits: 0, apex: 0 };
     let ms = 0;
     // One bounce is one IMPACT, not one contact point. A die landing flat puts
     // several contact equations on the floor in a single step and cannon-es
@@ -1672,6 +1678,15 @@ export function createDiceStage(canvas, video) {
     // events of a step share `ms`), and never inside the refractory window.
     let lastFloorMs = -Infinity;
     let lastWallMs = -Infinity;
+    // How far the die RISES off its first counted bounce, in world units
+    // against a die ~1.6 across. The bounce count says a bounce happened; it
+    // cannot tell a 0.05-unit shudder from half a die of air, and the first
+    // profile that passed every other bound still read as drop-tumble-settle
+    // because its rebounds were 13% of a die. `bounceY` is the body centre at
+    // that impact (collide fires before the step integrates, so it is the
+    // height at contact) and `peakY` is the highest the centre gets after it.
+    let bounceY = null;
+    let peakY = 0;
     const counted = (last) => ms !== last && ms - last >= BOUNCE_REFRACTORY_MS;
     const onCollide = (e) => {
       const speed = Math.abs(e.contact.getImpactVelocityAlongNormal());
@@ -1680,6 +1695,10 @@ export function createDiceStage(canvas, video) {
         if (!counted(lastFloorMs)) return;
         lastFloorMs = ms;
         metrics.bounces += 1;
+        if (bounceY === null) {
+          bounceY = dieBody.position.y;
+          peakY = bounceY;
+        }
       } else if (wallBodies.includes(e.body)) {
         if (!counted(lastWallMs)) return;
         lastWallMs = ms;
@@ -1692,11 +1711,16 @@ export function createDiceStage(canvas, video) {
         world.step(PHYS_STEP);
         ms += PHYS_STEP * 1000;
         frames.push(readFrame());
+        if (bounceY !== null && dieBody.position.y > peakY) peakY = dieBody.position.y;
         if (isSleepy(frames[frames.length - 1].lin, frames[frames.length - 1].ang)) break;
       }
     } finally {
       dieBody.removeEventListener("collide", onCollide);
     }
+    // No counted bounce means no rebound to measure, which is a rise of zero
+    // and not a missing reading: a throw that never struck the floor hard
+    // enough to count has failed the bounce bound already.
+    metrics.apex = bounceY === null ? 0 : +Math.max(0, peakY - bounceY).toFixed(3);
     metrics.flightMs = Math.round(ms);
     frames.metrics = metrics;
     return frames;
@@ -1946,6 +1970,8 @@ export function createDiceStage(canvas, video) {
         flightMs: lastRoll?.flightMs ?? null,
         bounces: lastRoll?.bounces ?? null,
         wallHits: lastRoll?.wallHits ?? null,
+        // How far the die rose off its first counted bounce, world units.
+        apex: lastRoll?.apex ?? null,
         heldFrames: lastRoll?.heldFrames ?? null,
         craneMs: CRANE_MS,
         holdMs: HOLD_MS,

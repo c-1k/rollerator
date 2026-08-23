@@ -5,10 +5,11 @@
  * The unit tests pin the shape of the THROW profile and the browser suite
  * proves one roll of each die is legal. Neither can tell you the throw
  * *feels* like a throw: that is a property of the distribution -- how long
- * the die is in flight, how many times it bounces, how often it ends up
- * jammed against a wall. This script measures that distribution and holds
- * it against the acceptance in the design spec (section 9), so tuning the
- * profile is a measurement and not a matter of opinion.
+ * the die is in flight, how many times it bounces, how HIGH it comes off the
+ * floor when it does, how often it ends up jammed against a wall. This
+ * script measures that distribution and holds it against the acceptance in
+ * the design spec (section 9), so tuning the profile is a measurement and
+ * not a matter of opinion.
  *
  * It reads the tray half-extents off debug() rather than restating them,
  * because the walls are built from THROW.tray and a literal here would go on
@@ -32,8 +33,8 @@
  *                   THIS is the acceptance run.
  *
  *   --fast          The silent simulation runs synchronously inside roll(),
- *                   so flightMs / bounces / wallHits / landedPos are already
- *                   final the moment roll() returns its promise. Fast mode
+ *                   so flightMs / bounces / wallHits / apex / landedPos are
+ *                   already final the moment roll() returns. Fast mode
  *                   reads them there and aborts before the replay: ~0.01 s a
  *                   roll instead of ~3 s. It therefore CANNOT measure
  *                   heldFrames or the click-to-number time, and it says so
@@ -76,6 +77,15 @@ const BOUNDS = {
   p95FlightMs: 1800,
   bounces: [1, 5],
   bounceShare: 0.9,
+  // How far the die must rise off its first counted bounce, in world units
+  // against a die ~1.6 across, and how often. The bounce COUNT cannot tell a
+  // hop from a shudder: a profile scoring 100% on the count still read as
+  // drop-tumble-settle because its rebounds were 0.21 units, 13% of a die.
+  // 0.35 is a bit over a fifth of the die's width -- visible at the flight
+  // camera's height. Not every roll: a die that lands flat on its last legs
+  // legitimately does not rebound, so this is a share like the others.
+  apex: 0.35,
+  apexShare: 0.8,
   wallHits: 1,
   wallHitShare: 0.8,
   heldFrames: 0,
@@ -154,6 +164,7 @@ function fastBatch(n) {
       flightMs: d.flightMs,
       bounces: d.bounces,
       wallHits: d.wallHits,
+      apex: d.apex,
       landedPos: d.landedPos,
     });
     window.__dice.abortRoll();
@@ -248,6 +259,13 @@ try {
           "Reduced motion takes a different path and records no metrics.",
       );
     }
+    if (samples.some((s) => s.apex == null)) {
+      throw new Error(
+        `${kind}: debug() reported no apex -- this build predates the ` +
+          "rebound-height metric, so the apex bound below would score 0% " +
+          "against nothing rather than against a measured throw.",
+      );
+    }
 
     // Time-to-number goes through the real button once per die, because that
     // is what a player does. Two clocks: the throw's own (click to the crane,
@@ -281,6 +299,7 @@ try {
     const flights = samples.map((s) => s.flightMs);
     const bounces = samples.map((s) => s.bounces);
     const walls = samples.map((s) => s.wallHits);
+    const apexes = samples.map((s) => s.apex);
     const held = FAST ? [] : samples.map((s) => s.heldFrames);
     const maxX = Math.max(...samples.map((s) => Math.abs(s.landedPos[0])));
     const maxZ = Math.max(...samples.map((s) => Math.abs(s.landedPos[2])));
@@ -296,6 +315,9 @@ try {
       hi: Math.max(...flights),
       bounceHist: histogram(bounces),
       bounceShare: inRange / bounces.length,
+      apexMed: median(apexes),
+      apexMin: Math.min(...apexes),
+      apexShare: apexes.filter((a) => a >= BOUNDS.apex).length / apexes.length,
       wallMean: mean(walls),
       wallQuietShare:
         walls.filter((w) => w <= BOUNDS.wallHits).length / walls.length,
@@ -323,6 +345,12 @@ try {
         `bounces in ${BOUNDS.bounces[0]}-${BOUNDS.bounces[1]} only ` +
           `${round(row.bounceShare * 100, 0)}% (need ` +
           `${BOUNDS.bounceShare * 100}%)`,
+      );
+    if (row.apexShare < BOUNDS.apexShare)
+      fail(
+        `apex >= ${BOUNDS.apex} in only ${round(row.apexShare * 100, 0)}% ` +
+          `(need ${BOUNDS.apexShare * 100}%) -- median rise ` +
+          `${round(row.apexMed)}: it drops and tumbles, it does not bounce`,
       );
     if (row.wallQuietShare < BOUNDS.wallHitShare)
       fail(
@@ -352,6 +380,11 @@ try {
       `       bounces   [${row.bounceHist}]  in-range ` +
         `${round(row.bounceShare * 100, 0)}%   wallHits mean ${round(row.wallMean)}` +
         `  <=${BOUNDS.wallHits} in ${round(row.wallQuietShare * 100, 0)}%`,
+    );
+    console.log(
+      `       apex      med ${String(round(row.apexMed)).padStart(5)}` +
+        `  min ${String(round(row.apexMin)).padStart(5)}` +
+        `  >=${BOUNDS.apex} in ${round(row.apexShare * 100, 0)}%`,
     );
     console.log(
       `       landing   max|x| ${round(maxX)}  max|z| ${round(maxZ)}` +

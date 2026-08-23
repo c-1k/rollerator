@@ -144,6 +144,18 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
         1,
       );
       expect(d.bounces, `${kind} bounces ${d.bounces}`).toBeLessThanOrEqual(5);
+      // `apex` is how far the die rose off its first counted bounce. The
+      // FEEL bound on it (>= 0.35 in >= 80% of rolls) is the soak's, not
+      // this test's, and deliberately so: it is a property of a
+      // distribution, and the shipped profile does not meet it — see the
+      // Task 5 report. What is asserted here is that the number is real, so
+      // that dropping apex from the silent sim or from debug() fails a test
+      // instead of quietly scoring the soak's bound against undefined.
+      expect(
+        typeof d.apex === "number" && Number.isFinite(d.apex),
+        `${kind} reported no apex (${d.apex}) — the rebound-height metric is not wired`,
+      ).toBe(true);
+      expect(d.apex, `${kind} apex ${d.apex}`).toBeGreaterThanOrEqual(0);
       expect(
         d.heldFrames,
         `${kind} held ${d.heldFrames} frames — the replay stuttered`,
