@@ -137,8 +137,14 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
         d.flightMs,
         `${kind} flight ${d.flightMs} ms`,
       ).toBeGreaterThanOrEqual(300);
+      // 2200, not the soak's p95 of 2000: this is ONE roll, and a single
+      // draw is allowed past a 95th percentile by definition. What a single
+      // roll may never breach is the product ceiling — the number on screen
+      // within 2.2 s of the click — and since #hort appears at beginCrane,
+      // the flight is very nearly all of that. So the single-roll bound is
+      // the ceiling itself; the soak's tighter band holds the distribution.
       expect(d.flightMs, `${kind} flight ${d.flightMs} ms`).toBeLessThanOrEqual(
-        2000,
+        2200,
       );
       expect(d.bounces, `${kind} bounces ${d.bounces}`).toBeGreaterThanOrEqual(
         1,
@@ -299,13 +305,24 @@ test("switching environment clears the previous result; resizing keeps the revea
     d.landedPos,
     "a presented result must carry where it landed",
   ).not.toBeNull();
-  const dx = d.reveal.position[0] - d.landedPos[0];
-  const dy = d.reveal.position[1] - d.landedPos[1];
-  const dz = d.reveal.position[2] - d.landedPos[2];
+  // Eye-to-aim is measured to the reveal's OWN aim point, not to the die.
+  // Since the framing fix the two are deliberately different: the rig slides
+  // along screen-down by `rise` so the die sits high in the frame and clear
+  // of the quote card, which moves the aim off the die by that much. The
+  // distance from the eye to that aim is still the lift above the rest.
+  const dx = d.reveal.position[0] - d.reveal.aim[0];
+  const dy = d.reveal.position[1] - d.reveal.aim[1];
+  const dz = d.reveal.position[2] - d.reveal.aim[2];
   expect(
     Math.abs(Math.hypot(dx, dy, dz) - (6.6 - d.landedPos[1])),
     "reveal must aim at the landing: eye-to-aim = 6.6 − restY",
   ).toBeLessThan(1e-2);
+  // The aim is offset from the die along the ground plane only, so the die's
+  // height is untouched and the camera cannot be tipped toward the floor.
+  expect(
+    Math.abs(d.reveal.aim[1] - d.landedPos[1]),
+    "the reveal's aim must stay at the die's height",
+  ).toBeLessThan(1e-6);
   const same =
     d.meshQuat[0] * d.landedQuat[0] +
     d.meshQuat[1] * d.landedQuat[1] +

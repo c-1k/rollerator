@@ -54,7 +54,11 @@ the numbers everywhere else:
   1.62: the die spawned 0.59 units *inside* the wall on most rolls and the
   solver ejected it at up to 10 u/s, which is where the wall-hit counts of
   3–7 a roll came from.
-- **The tray is a throw tunable, and it grew.** The four walls are invisible
+- **The tray is a throw tunable, and it grew.** *(Superseded 2026-08-23 by
+  Task 5: the rectangular tray was replaced by the invisible cylinder of §3.
+  `THROW.tray` no longer exists — `THROW.arena` does. The reasoning below
+  still holds for why containment belongs in the profile at all.)* The four
+  walls are invisible
   physics bounds, not scenery — the backdrop is a 2D film and the camera
   frames the die wherever it lands — so their size belongs in `THROW` with
   everything else it trades against. `THROW.tray` now holds the half-extents
@@ -64,116 +68,175 @@ the numbers everywhere else:
   is why the first tuning pass could not reach the acceptance from any
   direction.
 
-## 3. World model (unchanged from sub-spec 1 §2, restated for what matters here)
+## 3. World model — an invisible cylinder (rewritten 2026-08-23, Task 5)
+
+> Supersedes the tray this section described. The tray is gone; nothing in
+> the code or the tests refers to one.
 
 The die is a hero object over a 2D film backdrop. The physics "table" is a
-tray: floor at `y = 0`, ceiling at `9.4`, and four walls at `±THROW.tray.x`
-and `±THROW.tray.z` — **`3.0 × 2.8` as tuned, not the `1.72 / 1.62` this
-section carried originally**; see §2's corrections and §4. The die's
-circumradius is 0.82, so it is ~1.6 units across, not 0.72.
+floor at `y = 0` and an **invisible cylinder** — a ring of `THROW.arena.planes`
+(16) static planes, each tangent to the circle of `THROW.arena.radius` (4.0),
+inward normals pointing at the origin. cannon-es has no infinite cylinder and
+a plane is the one shape nothing tunnels through, so the cylinder is
+approximated by flats. The inscribed radius is exactly `radius`; the corners
+between planes bulge to `radius / cos(pi / 16)`, 2 % — under the landing
+margin, so the bound the soak holds is honest against the worst-placed plane.
 
-The camera looks at the die, so **wherever the die lands it is centred on
-screen after the crane**; "stays where it lands" is about the motion (no
-glide), not the final composition. The blob shadow follows the die. The
-shadow-catcher disc (radius 3.4) does not reach the tray's corners
-(`hypot(3.0, 2.8) = 4.10`) and does not need to — it is not scenery, it only
-has to be under the die wherever the die can *stop*. Landing clearance
-(`0.82 + 0.3`) keeps the centre inside `hypot(1.88, 1.68) = 2.52`, and the
-shadow reaches the die's own 0.82 past that, so what must be covered is 3.34:
-0.06 to spare. **A bigger tray needs a bigger disc**, and the arithmetic is
-in `physics-roll.js` beside `tray`. The flight camera (13.6 up, 54° vertical)
-sees ±6.93 in z and ±9.86 in x, so the tray could grow by half again before
-the camera, rather than the disc, became the binding constraint.
+**Why a circle and not a box.** A box has four corners, and a die that reaches
+one pings off two walls at once. Over a 2D backdrop with nothing drawn there,
+that reads as a bounce off empty air. A circle has no corners and no preferred
+direction, and the walls it does have are **dead**: `contact.wall` is
+restitution 0.08 and friction 2.0, so a touch damps and redirects rather than
+rebounding. In the tuned profile the ring is a backstop and little else —
+measured `wallHits` mean 0.0 on every die.
 
-## 4. The throw — a profile in `physics-roll.js`
+The die's circumradius is 0.82, so it is ~1.6 units across.
 
-These are the tuned values (soak of 7 × 20 rolls, 2026-08-23). All tunables
-live in one exported, pure profile so they can be unit-tested and tuned in
-one place:
+Two limits bound how far `radius` can grow, both checked at 4.0:
+
+- The flight camera (`dropCam` 13.6 up, `DROP_FOV` 54 vertical, 1280x900)
+  sees ±6.93 in z and ±9.86 in x. Nowhere near binding.
+- The shadow-catcher disc (radius 5.0) has to be under the die wherever the
+  die can *stop*, plus the die's own 0.82 of shadow: `4.0 - 1.12 + 0.82 =
+  3.70` against 5.0. **Grow the disc with the ring.**
+
+**The camera looks at the die**, so wherever it lands it is framed after the
+crane; "stays where it lands" is about the motion (no glide), not the final
+composition. Two framing numbers are set here rather than in the physics:
+
+- **`revealLift`** — how far above the rest the crane ends, which *is* the
+  eye-to-aim distance. 6.6 portrait, 5.6 landscape. It used to borrow
+  `idleCam.y` (9.2 / 8.2), which left the die at ~27 % of the frame's narrow
+  axis in a wide empty floor. At `PRESENT_FOV` 44 the narrow half-extent at
+  the aim plane is `d * 0.404 * min(1, aspect)`, so these lifts put the die at
+  ~41 % of it in both orientations, with better than 2× of margin to the edge.
+- **`REVEAL_RISE`** — 0.16 of frame height, converted to world units at the
+  aim plane and passed to `revealCamera` as `rise`. It slides the camera and
+  its aim together along screen-down, so the die does not move and the
+  distance and tilt are unchanged; only where the die falls in the viewport
+  changes. It exists because the quote card is a band across the bottom of
+  the page and a dead-centre reveal put the die behind it. Measured clearance
+  between the die's projected bottom edge and the card's top edge: **102–154 px
+  landscape (11.3–17.1 % of viewport height) and 211–237 px portrait
+  (21.1–23.7 %)**, over five rolls each. `e2e/roll.spec.js` holds it to a
+  4 %-of-viewport floor, reading both rects at runtime.
+
+## 4. The throw — a profile in `physics-roll.js` (rewritten 2026-08-23, Task 5)
+
+All tunables live in one exported, pure profile so they can be unit-tested
+and tuned in one place. These are the tuned values; every number below was
+measured, not guessed, and the file itself carries the reasoning.
 
 ```js
 export const THROW = {
-  gravityY: -120,          // was -48; the floor §8's "heavy" test allows
-  physStep: 1 / 120,       // was 1/60; higher speeds need finer steps
-  flightMaxMs: 2500,       // was 6800: hard cap on the silent sim
-  tray: { x: 3.0, z: 2.8 },// half-extents of the four walls; see §2 and below
+  gravityY: -120,
+  physStep: 1 / 240,                 // the slam travels 0.32 u/step at 1/240
+  flightMaxMs: 2500,
+  arena: { radius: 4.0, planes: 16 },
+  bounceHeights: [4, 2],             // authored hops, in die-heights
+  firstBounceHold: { ms: 55, carry: 0.4, spin: 30 },
+  bounceSpeed: 5.0,                  // below this a floor contact is settling
   launch: {
-    x: [-0.28, 0.28],      // across the tray
-    y: [1.5, 1.9],         // was 4.7–5.45: a hand, not a drop from the ceiling
-    z: [0.78, 0.98],       // clear of the +z wall by more than the die's 0.82
+    x: [-0.28, 0.28],
+    y: [2.4, 2.8],
+    z: [0.15, 0.45],
     vx: [-0.22, 0.22],
-    vy: [-0.6, -0.1],      // already moving down, slightly
-    vz: [-3.2, -2.6],      // was -3.5…-2.35: thrown, not dropped
-    spin: [6, 4, 6],       // ± rad/s per axis; was 34/22/34 ÷ 2 → 17/11/17
+    vy: [-76, -70],                  // the slam
+    vz: [-2.8, -2.2],
+    spin: [26, 18, 26],              // ± rad/s per axis
   },
-  contact: { friction: 1.15, restitution: 0.28 },    // was 0.4 / 0.42
-  damping: { linear: 0.0, angular: 0.8 },            // was 0.012 / 0.035
-  sleep: { speedLimit: 0.35, timeLimit: 0.25 },      // was 0.22 / 0.55
-  rest: { lin: 0.002, ang: 0.006 },                  // isSleepy thresholds; were 0.16 / 0.48
+  contact: {
+    friction: 0.7,
+    restitution: 0.3,
+    restitutionByKind: { d12: 0.2, d20: 0.2 },
+    wall: { friction: 2.0, restitution: 0.08 },
+  },
+  damping: { linear: 0.85, angular: 0.86 },
+  sleep: { speedLimit: 0.7, timeLimit: 0.14 },
+  rest: { lin: 0.3, ang: 1.0 },
 };
 ```
 
-`throwPose(rng)` draws from `THROW.launch`. `GRAVITY_Y`, `FLIGHT_MAX_MS`,
-`LIN_SLEEP`, `ANG_SLEEP` become derived from `THROW` (kept as exports so
-nothing else has to change its imports). `dice3d.js` reads `THROW.contact`,
-`THROW.damping`, `THROW.sleep`, `THROW.physStep` where it currently has
-literals (`makeDieBody`, the `ContactMaterial`, `PHYS_STEP`).
+### The authored hops
 
-**The tray is the number the rest is derived from.** `THROW.tray` holds the
-half-extents of the four invisible walls, `dice3d.js` builds the wall planes
-from it, and `debug()` reports it so tests read the bounds the walls were
-actually built from rather than restating them. Two constraints follow from
-the die's real circumradius of 0.82 (§2):
+`bounceHeights` is the authored spine of the throw: **one rebound target per
+counted floor impact, in die-heights, taken in order.** Restitution cannot
+lift a die four of its own heights off a hand-height drop — that needs
+`e ~ 1.6` — so the launch slams the die down at ~76–80 u/s and the silent
+simulation normalizes the vertical velocity of the first two counted floor
+impacts, each to the speed that actually reaches its own target. Everything
+after them is pure physics. Determinism is untouched: the kick happens inside
+the sim whose frames become the replay.
 
-- **Spawn.** Every launch draw must keep the whole die inside the tray —
-  `|x| + 0.82 < tray.x` and `z + 0.82 < tray.z`. Below that the die spawns
-  interpenetrating a wall and the solver ejects it at up to 10 u/s, which is
-  what the original `z` up to 1.4 against a wall at 1.62 did on most rolls.
-  `physics-roll.test.js` asserts this over 500 draws.
-- **Landing.** A roll must come to rest with `0.82 + 0.3` of clearance, so the
-  usable landing area is a good deal smaller than the tray. At 2.6 × 2.4 four
-  of the seven dice ended against a wall; at 3.0 × 2.8 none do.
+**The second entry is Cam's** ("the second bounce needs to be higher"). Left
+to restitution the second hop got whatever was left over and read as the die
+giving up after one big leap. Half the first is deliberate — it reads as a
+chain rather than as two throws, and the e2e holds `apex2Heights <
+apexHeights` for exactly that reason.
 
-**Two dice set the limits, and they pull opposite ways.** d4 is the shortest
-roll in the set — a tetrahedron lands on a big flat face and stops — and
-d12/d20 are the roundest, so they roll longest and tip most. Everything that
-lifts d4's median pushes the round dice past the landing bound: at
-`restitution` 0.44 d4 reaches 637 ms and two dice lose their landing bound and
-d20 its bounce share. The profile above is the balance point; §9's median floor
-of 450 is set by d4 and nothing else.
+**The rebound speed is the inverse of the damped rise, not `sqrt(2gh)`.** With
+`damping.linear` at 0.85 the ballistic figure lands the die short: the
+authored 4 measured 3.7 die-heights, outside the ±10 % the bounce was ruled to
+hold. `reboundSpeed` bisects `dampedRise` instead, so an authored height is
+honest under any damping, and `riseVelocityAt` gives the hold the true damped
+trajectory to defend rather than a ballistic line that would quietly add
+energy. Both are unit-tested, including by numerically integrating the
+velocity to the apex and comparing against the closed form.
 
-**A bounce you can see and a bounce budget of five are mutually exclusive
-here, and this profile chooses the budget.** `apex` (§7) measures how far the
-die rises off its first counted bounce. The acceptance asks for ≥ 0.35 —
-about a fifth of the die's 1.6-unit width — in ≥ 80 % of rolls. This profile
-scores **0 % on all seven dice**, median rises 0.00–0.13. It was not accepted
-without a search: the tray was grown to 4.0 × 3.6 (shadow disc to 5.0) and
-restitution swept 0.45–0.60, then launch height to the 2.95 that §8's
-`y < 3` test allows. The two bounds move in exact opposition, because every
-rebound big enough to see is another contact above the 2.2 u/s floor and so
-another counted bounce:
+`firstBounceHold` is what makes a kick survive the contact it fires out of.
+`ms` 55 defends the vertical against the grazing contacts a spinning die makes
+on its way up; `carry` caps the tangential impulse that Coulomb friction lets
+ride along with an impact that size — without it dice left the bounce at 8–14
+u/s sideways and landed against the ring on most throws.
 
-| profile (tray 4.0 × 3.6, N = 20 × 7 dice) | `apex` ≥ 0.35 | `bounces` 1–5 |
-|---|---|---|
-| restitution 0.28 (shipped) | 0 % | 100 % |
-| restitution 0.45 | 0–10 % | 70–100 % |
-| restitution 0.60 | 0–50 % | 20–95 % |
-| launch `y` 2.4–2.85, restitution 0.60 | 40–90 % | 10–100 % |
-| launch `y` 2.85–2.95, restitution 0.60, friction 0.45 | 60–90 % | 5–80 % |
+### Spin is a ruling, not a tunable
 
-The corner that comes closest to the apex bound also lands every die outside
-the tray and puts d12's median flight at 1425 ms. So the tray went back to
-3.0 × 2.8 and the disc to 3.4, and `apex` ships as a measured, enforced bound
-that this profile **misses** — the soak exits 1 on it and on nothing else.
-Closing it needs a decision that is not a `THROW` value: relax the bounce cap,
-raise `bounceSpeed` so one rebound chain stops counting as five bounces, or
-shrink the die relative to its tray.
+Cam: **"i want that shit SPINNING."** `launch.spin` is `[26, 18, 26]` and
+`firstBounceHold.spin` is 30; those are floors, not targets. The die is only
+airborne for 25 ms before the slam, so `launch.spin` is what *release* reads
+as, and the tumble through the hops is that decayed by `damping.angular`.
 
-**`rest` is the lever that ends a throw.** At 0.002/0.006 the silent
-simulation runs until the die is genuinely still, which is worth 100–275 ms per
-die over the old 0.21/0.51 and adds no contacts — the tail is far below the
-impact floor. It is only tunable because `isSleepy`'s unit test now passes its
-thresholds explicitly instead of letting them default to this profile.
+**`damping.angular` is not a containment lever and must not be used as one.**
+It was briefly raised from 0.86 to 0.97 during the centring work; that bought
+a little containment and cost the tumble, and Cam ruled the other way
+immediately. It is back at 0.86, the die turns visibly through the flight,
+both hops and the tail — measured tail spin 5–13 rad/s in the last 200 ms
+before rest — and centring is bought entirely with `linear`,
+`firstBounceHold.carry` and the launch position instead. The soak reports tail
+spin and **never fails on it**.
+
+### Where the die actually travels, and how it was centred
+
+The travel is not in the flight. Traced frame by frame, the leap is nearly
+vertical — radius moves 0.73 → 0.56 across 650 ms of air. The travel happens
+at the landing: the die comes down off four die-heights at ~38 u/s and lands
+on a **corner**, and a corner impact turns a vertical impulse into sideways
+motion and spin. Measured 0.9 u/s and 0.9 rad/s in the frame before contact,
+**11.7 u/s and 15.8 rad/s in the frame after**; the die then rolled outward
+for 450 ms and covered 2.6 units. That squirt, not the flight, is what used to
+finish every throw against the ring.
+
+What worked, in order of effect: `damping.linear` (the only thing that removes
+horizontal speed off the floor), `contact.restitution` (the size of that
+corner impulse), `firstBounceHold.carry`, and pulling `launch.z` in from
+`[0.78, 0.98]`. What did **not** work, measured and rejected: lowering floor
+friction (0.7 → 0.35 left landings unchanged and made the tail *longer*), and
+moving the spawn to the centre while travel was still large (the die simply
+travelled the same distance from a new origin).
+
+### `rest` is the lever that ends a throw
+
+`rest` is where the silent sim stops recording, and it is **"imperceptible",
+not "numerically zero"**. At `ang` 1.0 the die turns just under a degree per
+60 fps frame and at `lin` 0.3 it creeps a three-hundredth of its own width, so
+the frame where recording stops is indistinguishable from the one before it.
+The old 0.006 rad/s asked the die to be still to four decimal places — and
+because the spin ruling keeps the die turning, cannon-es would not sleep a
+body whose spin kept it awake, so the sim ran on toward the flight cap. That,
+not the bounce chain, was what put d10/d12/d20 over the flight band; raising
+these thresholds returned most of a second. `restitutionByKind` takes the d12
+and d20 — the two roundest solids, which roll rather than settle — down to
+0.2, which shortens their chain and their roll-out together.
 
 ## 5. Replay: real time, interpolated
 
@@ -267,8 +330,13 @@ they are):
 - `flightMs ≤ 2000` and `≥ 400` (a throw, not a drop-and-stop).
 - `1 ≤ bounces ≤ 4`.
 - `heldFrames === 0`.
-- `landedPos` inside the tray: `|x| ≤ 1.72 − 0.3`, `|z| ≤ 1.62 − 0.3`
-  (half the die's radius clear of a wall).
+- `landedPos` inside the ring: `hypot(x, z) ≤ arena.radius − (0.82 + 0.3)`,
+  read off `debug().arena` rather than restated, so the assertion cannot stop
+  meaning "clear of the wall" the moment the arena is tuned.
+- Both authored hops fired (`kicks === 2`), the first rose 3.2–4.8
+  die-heights, the second 1.5–2.5, and the second came in under the first.
+- The settled die clears the quote card: its projected bottom edge sits above
+  the card's top edge by more than 4 % of the viewport height (§3).
 - `phase === "idle"` pin stays.
 
 The resize test: `aim` is now `lastRoll.landedPos`; assert

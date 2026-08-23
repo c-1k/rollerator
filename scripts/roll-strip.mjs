@@ -214,7 +214,12 @@ try {
     window.__dice.roll();
     const first = window.__dice.debug();
     const flightMs = first.flightMs;
-    const step = flightMs / n;
+    // Spaced so frame 1 lands at t~0 and frame n at the end of the flight,
+    // rather than frame 1 one step in. The release is 25 ms long -- the die is
+    // airborne for about 1.5 frames before the slam -- so a sheet that starts
+    // one step in cannot show it at all, and "does it spin on release" is
+    // exactly what the sheet is read for.
+    const step = flightMs / (n - 1);
     const t0 = performance.now();
     const shots = [];
     const trace = [];
@@ -224,7 +229,7 @@ try {
         const d = window.__dice.debug();
         const t = performance.now() - t0;
         trace.push(d.y);
-        while (k <= n && t >= k * step) {
+        while (k <= n && t >= (k - 1) * step) {
           shots.push({
             k,
             at: Math.round(t),
