@@ -12,10 +12,7 @@ import {
   FLIGHT_MAX_MS,
   GRAVITY_Y,
   HOLD_MS,
-  PRESENT_MS,
-  SNAP_MS,
   faceValueTable,
-  flightZoom,
   isSleepy,
   landedValue,
   restOffsetY,
@@ -24,6 +21,7 @@ import {
   rotateByQuat,
   slowMoScale,
   smoothProgress,
+  snapQuaternion,
   throwPose,
   triangleMedianUp,
   uniqueVertsAndFaces,
@@ -986,7 +984,6 @@ export function createDiceStage(canvas, video) {
   const camera = new THREE.PerspectiveCamera(IDLE_FOV, 1, 0.1, 80);
   const idleCam = new THREE.Vector3(0, 8.2, 0);
   const dropCam = new THREE.Vector3(0, 13.6, 0);
-  const settleCam = new THREE.Vector3(0, 8.2, 0);
   const SETTLE_AIM = new THREE.Vector3(0, 0.4, 0);
   let settleY = 0.62;
   camera.up.set(0, 0, -1);
@@ -1115,7 +1112,6 @@ export function createDiceStage(canvas, video) {
   let camFrom = idleCam.clone();
   let camTo = idleCam.clone();
   const followCam = new THREE.Vector3();
-  const actionCam = new THREE.Vector3();
   const lookAt = new THREE.Vector3();
   let fovFrom = IDLE_FOV;
   let fovTo = IDLE_FOV;
@@ -1147,7 +1143,10 @@ export function createDiceStage(canvas, video) {
     const portrait = camera.aspect < 0.86;
     idleCam.set(0, portrait ? 9.2 : 8.2, 0);
     dropCam.set(0, portrait ? 15.2 : 13.6, 0);
-    settleCam.copy(idleCam);
+    if (rollState?.phase === "hold" && rollState.reveal) {
+      rollState.reveal = computeReveal(rollState.mesh, rollState.index, rollState.landedQuat);
+      if (lastRoll) lastRoll.reveal = rollState.reveal;
+    }
     if (!rolling) {
       camera.fov = IDLE_FOV;
       camera.updateProjectionMatrix();
@@ -1155,9 +1154,9 @@ export function createDiceStage(canvas, video) {
     }
   }
 
-  /** Camera distance for the reveal; today's settle height, by aspect. */
+  /** Eye-to-aim distance for the reveal; today's settle height minus SETTLE_AIM.y, by aspect. */
   function revealDistance() {
-    return camera.aspect < 0.86 ? 9.2 : 8.2;
+    return camera.aspect < 0.86 ? 8.8 : 7.8;
   }
 
   /** The camera pose that presents face `index` of a die resting at `landedQuat`. */
@@ -1240,13 +1239,21 @@ export function createDiceStage(canvas, video) {
     world.addBody(dieBody);
   }
 
+  /**
+   * Idle placement only: sit the die on its current world-up face with the
+   * numeral upright for the overhead idle camera (screen-up = -Z, the
+   * lookDown convention). Never called after a roll has come to rest --
+   * the rest pose is the physics pose and the camera does the presenting.
+   */
   function sitDefaultFace() {
     if (!die) return;
     const idx = landedIndex(die);
-    const q = restQuaternionForFace(die, idx, settleCam);
-    const y = Math.max(0.08, restOffsetY(localVerts, [q.x, q.y, q.z, q.w], DIE_SCALE) - 0.02);
+    const n = die.userData.normals[idx];
+    const t = die.userData.faceUps[idx];
+    const q = snapQuaternion([n.x, n.y, n.z], [t.x, t.y, t.z]);
+    const y = Math.max(0.08, restOffsetY(localVerts, q, DIE_SCALE) - 0.02);
     settleY = y;
-    sitOnTable([q.x, q.y, q.z, q.w]);
+    sitOnTable(q);
   }
 
   function sitOnTable(quat) {
@@ -1371,23 +1378,6 @@ export function createDiceStage(canvas, video) {
     return Math.max(0.08, restOffsetY(localVerts, [quat.x, quat.y, quat.z, quat.w], DIE_SCALE) - 0.02);
   }
 
-  function restQuaternionForFace(target, index, camPos) {
-    const n = target.userData.normals[index].clone().normalize();
-    const texUp = target.userData.faceUps[index].clone().normalize();
-    const aim = new THREE.Vector3(0, 0.22, 0);
-    const worldN = (camPos || settleCam).clone().sub(aim);
-    if (Math.abs(worldN.x) < 0.08 && Math.abs(worldN.z) < 0.08) worldN.set(0, 1, 0);
-    worldN.normalize();
-    const qn = new THREE.Quaternion().setFromUnitVectors(n, worldN);
-    const upNow = texUp.clone().applyQuaternion(qn).projectOnPlane(worldN);
-    if (upNow.lengthSq() < 1e-8) return qn;
-    upNow.normalize();
-    const desired = camera.up.clone().projectOnPlane(worldN);
-    if (desired.lengthSq() < 1e-8) desired.set(0, 0, -1).projectOnPlane(worldN);
-    desired.normalize();
-    return new THREE.Quaternion().setFromUnitVectors(upNow, desired).multiply(qn);
-  }
-
   function meshNormals(mesh) {
     return mesh.userData.normals.map((n) => [n.x, n.y, n.z]);
   }
@@ -1444,16 +1434,10 @@ export function createDiceStage(canvas, video) {
       landedQuat: st.landedQuat.slice(),
       reveal: st.reveal,
     };
-    if (!st.fromQ) st.fromQ = new THREE.Quaternion();
     if (!st.fromP) st.fromP = new THREE.Vector3();
-    if (!st.holdQ) st.holdQ = new THREE.Quaternion();
-    if (!st.presentQ) st.presentQ = new THREE.Quaternion();
     if (!st.flatP) st.flatP = new THREE.Vector3();
     if (!st.toP) st.toP = new THREE.Vector3();
-    st.fromQ.copy(mesh.quaternion);
     st.fromP.copy(mesh.position);
-    st.presentQ.copy(restQuaternionForFace(mesh, st.index, settleCam));
-    st.holdQ.copy(st.presentQ);
     st.flatP.set(0, settleY, 0);
     st.toP.set(0, settleY, 0);
   }
@@ -1477,48 +1461,53 @@ export function createDiceStage(canvas, video) {
     camera.updateProjectionMatrix();
   }
 
+  const scratchM = new THREE.Matrix4();
+  const scratchEye = new THREE.Vector3();
+  const scratchTarget = new THREE.Vector3();
+  const scratchUp = new THREE.Vector3();
+
+  /** Camera orientation for a reveal pose, written into `out`. */
+  function revealQuaternion(reveal, out) {
+    scratchEye.fromArray(reveal.position);
+    scratchTarget.fromArray(reveal.aim);
+    scratchUp.fromArray(reveal.up);
+    // Matrix4.lookAt builds the camera convention (looks down -Z).
+    scratchM.lookAt(scratchEye, scratchTarget, scratchUp);
+    return out.setFromRotationMatrix(scratchM);
+  }
+
+  /** Cut the camera straight to a reveal pose. */
+  function placeCamera(reveal) {
+    camera.position.fromArray(reveal.position);
+    camera.up.fromArray(reveal.up);
+    camera.lookAt(reveal.aim[0], reveal.aim[1], reveal.aim[2]);
+  }
+
   function lookDown(pos, tx = 0, tz = 0) {
     camera.up.set(0, 0, -1);
     if (pos) camera.position.copy(pos);
     camera.lookAt(tx, SETTLE_AIM.y, tz);
   }
 
-  function lockSettleFrame(mesh, quat) {
-    mesh.quaternion.copy(quat);
+  function lockSettleFrame(mesh, reveal) {
     mesh.position.set(0, settleY, 0);
-    freezeBody(quat, mesh.position);
-    camera.up.set(0, 0, -1);
-    camera.position.copy(settleCam);
-    camera.lookAt(SETTLE_AIM);
+    freezeBody(mesh.quaternion, mesh.position);
+    placeCamera(reveal);
     setFov(PRESENT_FOV);
     updateBlob(mesh);
   }
 
-  function beginAlign(st, now) {
-    st.phase = "align";
-    st.snapT0 = now;
-    camFrom.copy(camera.position);
-    camTo.copy(settleCam);
-    fovFrom = camera.fov;
-    fovTo = PRESENT_FOV;
-    camTween += 1;
-    freezeBody(st.fromQ, st.fromP);
-    heatedIndex = st.index;
-    setFaceFocus(st.mesh, st.index, 0);
-  }
-
   function finishLanding(st, now) {
     captureLanded(st);
-    beginAlign(st, now);
+    beginHold(st, now);
   }
 
   function finishRoll(st) {
     if (!st) return;
     const mesh = st.mesh;
-    lockSettleFrame(mesh, st.presentQ);
     heatFace(mesh, st.index);
-    sitOnTable([st.presentQ.x, st.presentQ.y, st.presentQ.z, st.presentQ.w]);
-    lockSettleFrame(mesh, st.presentQ);
+    sitOnTable(st.landedQuat);
+    lockSettleFrame(mesh, st.reveal);
     st.finish(st.value);
   }
 
@@ -1549,7 +1538,7 @@ export function createDiceStage(canvas, video) {
   }
 
   function beginHold(st, now) {
-    lockSettleFrame(st.mesh, st.presentQ);
+    lockSettleFrame(st.mesh, st.reveal);
     st.phase = "hold";
     st.snapT0 = now;
     st.heated = true;
@@ -1662,19 +1651,28 @@ export function createDiceStage(canvas, video) {
       applyFrame(mesh, frames[i]);
       const span = Math.max(1, last - st.tailStart);
       const u = i <= st.tailStart ? 0 : smoothProgress(i - st.tailStart, span);
-      const cover = keepInFrame(mesh, followCam);
-      actionCam.lerpVectors(followCam, settleCam, u);
-      camera.position.lerp(actionCam, u > 0 ? 0.28 : 0.22);
-      setFov(camera.fov + ((cover.fov + (PRESENT_FOV - cover.fov) * u) - camera.fov) * 0.28);
-      lookDown(camera.position, cover.lx * (1 - u), cover.lz * (1 - u));
-      st.fromP.set(frames[i].p.x, frames[i].p.y, frames[i].p.z);
-      st.fromQ.set(frames[i].q.x, frames[i].q.y, frames[i].q.z, frames[i].q.w);
       if (u <= 0) {
-        mesh.position.copy(st.fromP);
-        mesh.quaternion.copy(st.fromQ);
+        // Still in flight: follow the die from overhead.
+        const cover = keepInFrame(mesh, followCam);
+        camera.position.lerp(followCam, 0.22);
+        setFov(camera.fov + (cover.fov - camera.fov) * 0.22);
+        lookDown(camera.position, cover.lx, cover.lz);
       } else {
+        // Tail: the die slides to centre in its own pose; the camera eases
+        // from the follow shot into the reveal shot. Nothing here writes
+        // mesh.quaternion — applyFrame above already set it from the replay.
+        if (!st.tailCamPos) {
+          st.tailCamPos = camera.position.clone();
+          st.tailCamQuat = camera.quaternion.clone();
+          st.tailFov = camera.fov;
+          st.revealPos = new THREE.Vector3().fromArray(st.reveal.position);
+          st.revealQuat = revealQuaternion(st.reveal, new THREE.Quaternion());
+        }
+        st.fromP.set(frames[i].p.x, frames[i].p.y, frames[i].p.z);
         mesh.position.lerpVectors(st.fromP, st.toP, u);
-        mesh.quaternion.slerpQuaternions(st.fromQ, st.presentQ, u);
+        camera.position.lerpVectors(st.tailCamPos, st.revealPos, u);
+        camera.quaternion.slerpQuaternions(st.tailCamQuat, st.revealQuat, u);
+        setFov(st.tailFov + (PRESENT_FOV - st.tailFov) * u);
         setFaceFocus(mesh, st.index, u);
       }
       updateBlob(mesh);
@@ -1682,7 +1680,7 @@ export function createDiceStage(canvas, video) {
       return;
     }
     if (st.phase === "hold") {
-      lockSettleFrame(mesh, st.presentQ);
+      lockSettleFrame(mesh, st.reveal);
       if (now - st.snapT0 >= HOLD_MS) finishRoll(st);
       return;
     }
@@ -1708,12 +1706,14 @@ export function createDiceStage(canvas, video) {
       reveal: null,
       t0: performance.now(),
       snapT0: 0,
-      fromQ: new THREE.Quaternion(),
       fromP: new THREE.Vector3(),
-      holdQ: new THREE.Quaternion(),
-      presentQ: new THREE.Quaternion(),
       flatP: new THREE.Vector3(),
       toP: new THREE.Vector3(),
+      tailCamPos: null,
+      tailCamQuat: null,
+      tailFov: 0,
+      revealPos: null,
+      revealQuat: null,
       replay: null,
       replayI: 0,
       replayT: 0,
@@ -1759,7 +1759,8 @@ export function createDiceStage(canvas, video) {
         captureLanded(st);
         heatFace(mesh, st.index);
         camTween += 1;
-        lockSettleFrame(mesh, st.presentQ);
+        sitOnTable(st.landedQuat);
+        lockSettleFrame(mesh, st.reveal);
         finish(st.value);
         return;
       }
