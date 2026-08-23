@@ -1143,7 +1143,10 @@ export function createDiceStage(canvas, video) {
     const portrait = camera.aspect < 0.86;
     idleCam.set(0, portrait ? 9.2 : 8.2, 0);
     dropCam.set(0, portrait ? 15.2 : 13.6, 0);
-    if (rollState?.phase === "hold" && rollState.reveal) {
+    if (rollState?.reveal) {
+      // Any phase, not just hold: the tail reads st.reveal every frame, so a
+      // resize mid-flight has to re-derive it or the landing stays framed for
+      // the old aspect for the rest of the roll.
       rollState.reveal = computeReveal(rollState.mesh, rollState.index, rollState.landedQuat);
       if (lastRoll) lastRoll.reveal = rollState.reveal;
     }
@@ -1163,9 +1166,9 @@ export function createDiceStage(canvas, video) {
     }
   }
 
-  /** Eye-to-aim distance for the reveal; today's settle height minus SETTLE_AIM.y, by aspect. */
+  /** Eye-to-aim distance of the reveal: today's idle height above the aim point. */
   function revealDistance() {
-    return camera.aspect < 0.86 ? 8.8 : 7.8;
+    return idleCam.y - SETTLE_AIM.y;
   }
 
   /** The camera pose that presents face `index` of a die resting at `landedQuat`. */
@@ -1477,6 +1480,8 @@ export function createDiceStage(canvas, video) {
   const scratchEye = new THREE.Vector3();
   const scratchTarget = new THREE.Vector3();
   const scratchUp = new THREE.Vector3();
+  const scratchRevealPos = new THREE.Vector3();
+  const scratchRevealQuat = new THREE.Quaternion();
 
   /** Camera orientation for a reveal pose, written into `out`. */
   function revealQuaternion(reveal, out) {
@@ -1492,7 +1497,8 @@ export function createDiceStage(canvas, video) {
   function placeCamera(reveal) {
     camera.position.fromArray(reveal.position);
     camera.up.fromArray(reveal.up);
-    camera.lookAt(reveal.aim[0], reveal.aim[1], reveal.aim[2]);
+    // One reading of the reveal orientation, shared with the tail slerp.
+    revealQuaternion(reveal, camera.quaternion);
   }
 
   function lookDown(pos, tx = 0, tz = 0) {
@@ -1518,10 +1524,7 @@ export function createDiceStage(canvas, video) {
     if (!st) return;
     const mesh = st.mesh;
     heatFace(mesh, st.index);
-    // No quaternion argument: the die already carries its rest pose, and
-    // re-writing it -- even with the right value -- would mask a post-rest
-    // write from the invariant-3 probe.
-    sitOnTable();
+    // Position and camera only -- the die keeps the pose physics left it in.
     lockSettleFrame(mesh, st.reveal);
     st.finish(st.value);
   }
@@ -1667,26 +1670,28 @@ export function createDiceStage(canvas, video) {
       const span = Math.max(1, last - st.tailStart);
       const u = i <= st.tailStart ? 0 : smoothProgress(i - st.tailStart, span);
       if (u <= 0) {
-        // Still in flight: follow the die from overhead.
-        const cover = keepInFrame(mesh, followCam);
-        camera.position.lerp(followCam, 0.22);
-        setFov(camera.fov + (cover.fov - camera.fov) * 0.22);
-        lookDown(camera.position, cover.lx, cover.lz);
+        // Still in flight: follow the die from overhead, exactly as the
+        // live-physics branch does.
+        trackFlight(mesh);
       } else {
         // Tail: the die slides to centre in its own pose; the camera eases
         // from the follow shot into the reveal shot. Nothing here writes
         // mesh.quaternion — applyFrame above already set it from the replay.
         if (!st.tailCamPos) {
+          // The *from* end is cached once: it is where the follow shot was
+          // when the tail began, and it must not drift.
           st.tailCamPos = camera.position.clone();
           st.tailCamQuat = camera.quaternion.clone();
           st.tailFov = camera.fov;
-          st.revealPos = new THREE.Vector3().fromArray(st.reveal.position);
-          st.revealQuat = revealQuaternion(st.reveal, new THREE.Quaternion());
         }
+        // The *to* end is re-derived every frame, so a resize mid-tail (which
+        // recomputes st.reveal) is picked up instead of being tweened past.
+        const toCamPos = scratchRevealPos.fromArray(st.reveal.position);
+        const toCamQuat = revealQuaternion(st.reveal, scratchRevealQuat);
         st.fromP.set(frames[i].p.x, frames[i].p.y, frames[i].p.z);
         mesh.position.lerpVectors(st.fromP, st.toP, u);
-        camera.position.lerpVectors(st.tailCamPos, st.revealPos, u);
-        camera.quaternion.slerpQuaternions(st.tailCamQuat, st.revealQuat, u);
+        camera.position.lerpVectors(st.tailCamPos, toCamPos, u);
+        camera.quaternion.slerpQuaternions(st.tailCamQuat, toCamQuat, u);
         setFov(st.tailFov + (PRESENT_FOV - st.tailFov) * u);
         setFaceFocus(mesh, st.index, u);
       }
@@ -1727,8 +1732,6 @@ export function createDiceStage(canvas, video) {
       tailCamPos: null,
       tailCamQuat: null,
       tailFov: 0,
-      revealPos: null,
-      revealQuat: null,
       replay: null,
       replayI: 0,
       replayT: 0,
@@ -1773,10 +1776,7 @@ export function createDiceStage(canvas, video) {
         captureLanded(st);
         heatFace(mesh, st.index);
         camTween += 1;
-        // No quaternion argument: the die already carries its rest pose, and
-        // re-writing it -- even with the right value -- would mask a post-rest
-        // write from the invariant-3 probe.
-        sitOnTable();
+        // Position and camera only -- the die keeps the pose physics left it in.
         lockSettleFrame(mesh, st.reveal);
         finish(st.value);
         return;

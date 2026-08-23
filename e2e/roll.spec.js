@@ -18,7 +18,7 @@ import { upwardFaceIndex } from "../physics-roll.js";
 // d4..d20 show 1..sides. d100 is a percentile TENS die: ten faces labelled
 // 00, 10, ... 90 (formatFace pads the zero face to "00"); its value is the
 // tens digit x 10, so 0..90 in steps of 10.
-const DICE = {
+const LEGAL = {
   d4: { legal: (v) => v >= 1 && v <= 4 },
   d6: { legal: (v) => v >= 1 && v <= 6 },
   d8: { legal: (v) => v >= 1 && v <= 8 },
@@ -45,7 +45,7 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
   await expect(page.locator("#hort")).toBeHidden();
   await expect(page.locator("#share")).toBeHidden();
 
-  for (const kind of Object.keys(DICE)) {
+  for (const kind of Object.keys(LEGAL)) {
     await test.step(`${kind} lands`, async () => {
       // Changing the die runs setIdle(), which must clear the last result.
       await page.selectOption("#die", kind);
@@ -64,7 +64,7 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
       expect(match[1]).toBe(kind);
       const value = Number(match[2]);
       expect(
-        DICE[kind].legal(value),
+        LEGAL[kind].legal(value),
         `${kind} rolled an illegal face: ${text}`,
       ).toBe(true);
 
@@ -73,8 +73,19 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
       await expect(page.locator("#share")).toBeVisible();
       await expect(page.locator("#roll")).toBeEnabled();
 
+      // Pin the read to post-finish. #hort appears when Promise.all([envPlay,
+      // diePlay]) resolves, and diePlay resolves at beginHold, not at finish --
+      // on a slower machine that race lands the read mid-hold, which silently
+      // stops covering finishRoll and everything after it.
+      await page.waitForFunction(
+        () => window.__dice.debug().phase === "idle",
+        null,
+        { timeout: 15_000 },
+      );
+
       // Invariants 2 and 3, read from the stage itself rather than the DOM.
       const d = await page.evaluate(() => window.__dice.debug());
+      expect(d.phase, "the invariant reads must land post-finish").toBe("idle");
       expect(
         d.landedIndex,
         "stage recorded no landed face",
@@ -111,6 +122,14 @@ test("switching environment clears the previous result; resizing keeps the revea
   await page.click("#roll");
   await expect(page.locator("#hort")).toBeVisible({ timeout: 45_000 });
 
+  // Invariant 4 is about a resize *after* the roll has come to rest, so pin the
+  // roll down first -- #hort can appear as early as beginHold on a slow machine.
+  await page.waitForFunction(
+    () => window.__dice.debug().phase === "idle",
+    null,
+    { timeout: 15_000 },
+  );
+
   // Invariant 4: the result stays presented across a resize. The die keeps its
   // physics rest pose, so the camera -- not the die -- has to re-frame for the
   // new aspect, or the numeral goes crooked while the player is reading it.
@@ -122,19 +141,41 @@ test("switching environment clears the previous result; resizing keeps the revea
     () =>
       new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))),
   );
+  await page.waitForFunction(
+    () => window.__dice.debug().phase === "idle",
+    null,
+    { timeout: 15_000 },
+  );
   const d = await page.evaluate(() => window.__dice.debug());
+  expect(d.phase, "the invariant reads must land post-finish").toBe("idle");
   expect(
     d.reveal,
     "a presented result must still carry its reveal",
   ).not.toBeNull();
+  // Two checks, because they fail for different reasons: the self-consistency
+  // one catches "the camera drifted off the reveal"; the absolute one catches
+  // "the reveal itself is wrong", which the first cannot see because d.cam and
+  // d.reveal.position both come out of the same applyFraming call.
+  //
   // debug() rounds cam to 2dp; round the reveal the same way. The "+ 0"
   // normalises -0 to 0 so an exact compare cannot trip over the sign of zero.
   const at2dp = (a) => a.map((n) => +n.toFixed(2) + 0);
-  const revealPos = at2dp(d.reveal.position);
+  const revealAt = at2dp(d.reveal.position);
   expect(
     at2dp(d.cam),
-    `camera must sit at the re-framed reveal, got ${JSON.stringify(d.cam)} vs ${JSON.stringify(revealPos)}`,
-  ).toEqual(revealPos);
+    `camera must sit at the re-framed reveal, got ${JSON.stringify(d.cam)} vs ${JSON.stringify(revealAt)}`,
+  ).toEqual(revealAt);
+  // Portrait reveal distance is idleCam.y - SETTLE_AIM.y = 9.2 - 0.4 = 8.8.
+  const aim = [0, 0.4, 0];
+  const aimDistance = Math.hypot(
+    d.reveal.position[0] - aim[0],
+    d.reveal.position[1] - aim[1],
+    d.reveal.position[2] - aim[2],
+  );
+  expect(
+    aimDistance,
+    `portrait reveal must sit 8.8 from SETTLE_AIM, got ${aimDistance.toFixed(4)}`,
+  ).toBeCloseTo(8.8, 2);
   const same =
     d.meshQuat[0] * d.landedQuat[0] +
     d.meshQuat[1] * d.landedQuat[1] +
