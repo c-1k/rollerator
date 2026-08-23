@@ -17,7 +17,9 @@ import {
   landedValue,
   pairOppositeFaces,
   quatSlerp,
+  dampedRise,
   reboundSpeed,
+  riseVelocityAt,
   restOffsetY,
   revealCamera,
   rotateAround,
@@ -485,7 +487,7 @@ describe("reboundSpeed", () => {
   it("is sqrt(2 g h) and round-trips through the ballistic rise", () => {
     const g = 120;
     for (const h of [0.5, 1.64, 6.56]) {
-      const v = reboundSpeed(h, -g);
+      const v = reboundSpeed(h, -g, 0);
       almost(v, Math.sqrt(2 * g * h), 1e-9);
       almost((v * v) / (2 * g), h, 1e-9);
     }
@@ -493,6 +495,71 @@ describe("reboundSpeed", () => {
 
   it("clamps a negative height to a standstill rather than returning NaN", () => {
     assert.equal(reboundSpeed(-1, -120), 0);
+  });
+
+  // The authored bounce is a promise about the HEIGHT the die reaches. Under
+  // damping the ballistic speed lands it short, so the profile's own damping
+  // has to be inverted or the 4 die-heights quietly becomes 3.7.
+  it("reaches the height it was asked for, damped or not", () => {
+    const g = 120;
+    for (const d of [0, 0.2, 0.35, 0.6]) {
+      for (const h of [0.5, 1.64, 6.56]) {
+        const v = reboundSpeed(h, -g, d);
+        almost(dampedRise(v, -g, d), h, 1e-6);
+      }
+    }
+  });
+
+  it("needs more speed the more damping there is", () => {
+    const g = 120;
+    const speeds = [0, 0.2, 0.35, 0.6].map((d) => reboundSpeed(6.56, -g, d));
+    for (let i = 1; i < speeds.length; i++) {
+      assert.ok(
+        speeds[i] > speeds[i - 1],
+        `damping ${i} wanted ${speeds[i]}, no more than ${speeds[i - 1]}`,
+      );
+    }
+  });
+
+  it("the profile's own damping is inverted, so the authored bounce is honest", () => {
+    const h = THROW.bounceHeights[0] * 1.61;
+    almost(dampedRise(reboundSpeed(h)), h, 1e-6);
+  });
+});
+
+describe("riseVelocityAt", () => {
+  it("is the ballistic line when nothing is damping it", () => {
+    for (const t of [0, 0.02, 0.055]) almost(riseVelocityAt(40, t, -120, 0), 40 - 120 * t, 1e-9);
+  });
+
+  it("starts at v0 and falls faster than ballistic once damped", () => {
+    almost(riseVelocityAt(40, 0, -120, 0.35), 40, 1e-9);
+    for (const t of [0.02, 0.055, 0.2]) {
+      assert.ok(
+        riseVelocityAt(40, t, -120, 0.35) < 40 - 120 * t,
+        `damped rise at ${t}s must sit under the ballistic line`,
+      );
+    }
+  });
+
+  // Integrating the velocity to zero must give back the height dampedRise
+  // claims, which is the consistency check between the two formulas.
+  it("crosses zero exactly at the apex dampedRise predicts", () => {
+    const g = 120;
+    const d = 0.35;
+    const v0 = 40;
+    const lambda = -Math.log(1 - d);
+    const tApex = (1 / lambda) * Math.log(1 + (lambda * v0) / g);
+    almost(riseVelocityAt(v0, tApex, -g, d), 0, 1e-9);
+    // Trapezoid the velocity up to the apex; it must match the closed form.
+    let h = 0;
+    const n = 200000;
+    for (let i = 0; i < n; i++) {
+      const a = riseVelocityAt(v0, (tApex * i) / n, -g, d);
+      const b = riseVelocityAt(v0, (tApex * (i + 1)) / n, -g, d);
+      h += ((a + b) / 2) * (tApex / n);
+    }
+    almost(h, dampedRise(v0, -g, d), 1e-6);
   });
 });
 
@@ -538,10 +605,18 @@ describe("THROW profile", () => {
   });
 
   it("the authored first bounce is four die-heights and reachable", () => {
-    assert.ok(THROW.firstBounceHeights >= 1, "the first bounce is authored");
+    assert.ok(THROW.bounceHeights.length >= 2, "two hops are authored");
+    assert.ok(THROW.bounceHeights[0] >= 1, "the first bounce is authored");
+    // Cam's ruling: the second hop must READ as a bounce in its own right and
+    // must not out-jump the first, or the chain looks like two throws.
+    assert.ok(
+      THROW.bounceHeights[1] < THROW.bounceHeights[0],
+      "the second hop must be smaller than the first",
+    );
+    assert.ok(THROW.bounceHeights[1] >= 1, "the second hop must still be visible");
     // One die-height is ~1.64, so this is ~6.6 units of rise. The lid is the
     // only thing above it and must stay clear, or the leap pings off it.
-    const rise = THROW.firstBounceHeights * 1.76;
+    const rise = THROW.bounceHeights[0] * 1.76;
     assert.ok(rise < 9, `a ${rise}-unit leap needs headroom under the lid`);
     // The kick is a velocity, and the velocity that reaches h under g is
     // sqrt(2gh) -- nothing else. A rebound of that speed must come back down

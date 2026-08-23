@@ -76,16 +76,17 @@ if (!Number.isInteger(N) || N < 1) {
 const BOUNDS = {
   // The first hop alone costs ~0.65 s, so the band moved up; the p95 and the
   // click-to-number ceiling are what stop the tail from spending it twice.
-  medianFlightMs: [450, 1600],
-  p95FlightMs: 1900,
+  medianFlightMs: [450, 1700],
+  p95FlightMs: 2000,
   bounces: [1, 6],
   bounceShare: 0.9,
-  // The first bounce is AUTHORED at THROW.firstBounceHeights die-heights, so
+  // Both hops are AUTHORED at THROW.bounceHeights die-heights, so
   // this is a compliance band and not a feel bound: it says the kick fired,
   // fired once, and was not eaten by the contact it fired out of. Tight, in
   // both directions -- too high means a double kick or a solver push-out
   // riding along, too low means the die was still in contact and lost it.
   apexHeights: [3.5, 4.5],
+  apex2Heights: [1.7, 2.3],
   apexShare: 0.9,
   wallHits: 1,
   wallHitShare: 0.8,
@@ -93,6 +94,16 @@ const BOUNDS = {
   wallMargin: 0.3,
   dieRadius: 0.82,
   timeToNumberMs: 2200,
+  // Where the die comes to REST, as a radius from centre. The radial landing
+  // bound above is containment -- it only says the die stopped clear of the
+  // ring. These two say the result reads as centred: Cam's 2026-08-23 note
+  // that "the final resting position needs to be more centered". They are a
+  // median and a p95 rather than a max on purpose. An off-centre rest is
+  // wanted and is what makes the throw look physical; what is not wanted is
+  // a die that habitually ends up against the wall, so the typical roll is
+  // held near the middle and the tail is allowed to wander.
+  restRadiusMedian: 1.2,
+  restRadiusP95: 2.0,
 };
 
 /** Start the static server unless one is already answering on PORT. */
@@ -167,8 +178,10 @@ function fastBatch(n) {
       wallHits: d.wallHits,
       apex: d.apex,
       apexHeights: d.apexHeights,
+      apex2Heights: d.apex2Heights,
+      tailSpin: d.tailSpin,
       dieHeight: d.dieHeight,
-      kicked: d.kicked,
+      kicks: d.kicks,
       landedPos: d.landedPos,
     });
     window.__dice.abortRoll();
@@ -272,7 +285,7 @@ try {
     // The kick is the one authored thing in the throw. If it did not fire,
     // every apex number below is measuring plain restitution and the run is
     // certifying the wrong physics.
-    const unkicked = samples.filter((s) => s.kicked !== true).length;
+    const unkicked = samples.filter((s) => s.kicks !== 2).length;
     if (unkicked) {
       throw new Error(
         `${kind}: the authored first bounce did not fire on ${unkicked} of ` +
@@ -314,11 +327,20 @@ try {
     const bounces = samples.map((s) => s.bounces);
     const walls = samples.map((s) => s.wallHits);
     const apexes = samples.map((s) => s.apexHeights);
+    const apex2s = samples.map((s) => s.apex2Heights);
+    const apex2Share =
+      apex2s.filter(
+        (a) => a >= BOUNDS.apex2Heights[0] && a <= BOUNDS.apex2Heights[1],
+      ).length / apex2s.length;
     const held = FAST ? [] : samples.map((s) => s.heldFrames);
     const radii = samples.map((s) =>
       Math.hypot(s.landedPos[0], s.landedPos[2]),
     );
     const maxR = Math.max(...radii);
+    const tailSpins = samples.map((s) => s.tailSpin);
+    const tailSpinMax = Math.max(...tailSpins);
+    const medR = median(radii);
+    const p95R = percentile(radii, 0.95);
     const inRange = bounces.filter(
       (b) => b >= BOUNDS.bounces[0] && b <= BOUNDS.bounces[1],
     ).length;
@@ -373,6 +395,13 @@ try {
           `${BOUNDS.apexShare * 100}%) -- median ${round(row.apexMed)}, ` +
           `range ${round(row.apexMin)}-${round(row.apexMax)}`,
       );
+    if (apex2Share < BOUNDS.apexShare)
+      fail(
+        `second bounce in ${BOUNDS.apex2Heights[0]}-${BOUNDS.apex2Heights[1]} ` +
+          `die-heights in only ${round(apex2Share * 100, 0)}% (need ` +
+          `${BOUNDS.apexShare * 100}%) -- median ${round(median(apex2s))}, ` +
+          `range ${round(Math.min(...apex2s))}-${round(Math.max(...apex2s))}`,
+      );
     if (row.wallQuietShare < BOUNDS.wallHitShare)
       fail(
         `wallHits <= ${BOUNDS.wallHits} in only ` +
@@ -383,6 +412,13 @@ try {
       fail(`heldFrames max ${row.heldMax} -- the replay stuttered`);
     if (maxR > clearR)
       fail(`landed ${round(maxR - clearR)} past the radial landing bound`);
+    if (medR > BOUNDS.restRadiusMedian)
+      fail(
+        `median resting radius ${round(medR)} > ${BOUNDS.restRadiusMedian} ` +
+          `-- results are not reading as centred`,
+      );
+    if (p95R > BOUNDS.restRadiusP95)
+      fail(`p95 resting radius ${round(p95R)} > ${BOUNDS.restRadiusP95}`);
     // The raw wall clock, and nothing else. It used to need correcting for
     // renderer speed because the replay advanced by tick's clamped dt and so
     // ran slow on a slow renderer; the replay now reads the wall clock
@@ -410,6 +446,20 @@ try {
     console.log(
       `       landing   max radius ${round(maxR)} of ${round(clearR)}` +
         `   heldFrames max ${FAST ? "n/a" : row.heldMax}`,
+    );
+    console.log(
+      `       bounce 2  med ${String(round(median(apex2s))).padStart(5)}` +
+        `  min ${String(round(Math.min(...apex2s))).padStart(5)}` +
+        `  max ${String(round(Math.max(...apex2s))).padStart(5)} die-heights` +
+        `  in-band ${round(apex2Share * 100, 0)}%`,
+    );
+    console.log(
+      `       tail spin max ${round(tailSpinMax)} rad/s (reported, not bounded)`,
+    );
+    console.log(
+      `       rest r    med ${String(round(medR)).padStart(5)} of ` +
+        `${BOUNDS.restRadiusMedian}   p95 ${String(round(p95R)).padStart(5)} of ` +
+        `${BOUNDS.restRadiusP95}`,
     );
     if (!FAST)
       console.log(

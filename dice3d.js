@@ -20,6 +20,7 @@ import {
   isSleepy,
   landedValue,
   reboundSpeed,
+  riseVelocityAt,
   restOffsetY,
   revealCamera,
   rotateAround,
@@ -1066,7 +1067,7 @@ export function createDiceStage(canvas, video) {
 
   // The shadow catcher. Not scenery: it does not have to reach the wall, it
   // has to be under the die wherever the die can STOP, plus the die's own
-  // 0.82 of shadow. At THROW.arena.radius 3.9 that is 3.60 and this is 5.0.
+  // 0.82 of shadow. At THROW.arena.radius 4.0 that is 3.70 and this is 5.0.
   // Grow it with the ring -- the arithmetic is in physics-roll.js.
   const catcher = new THREE.Mesh(
     new THREE.CircleGeometry(5.0, 64),
@@ -1229,14 +1230,36 @@ export function createDiceStage(canvas, video) {
     return revealLift - landedPos[1];
   }
 
+  // How far above frame centre the settled die sits, as a fraction of frame
+  // height. The quote card is a band across the bottom of the page and a die
+  // presented dead-centre lands under it -- Cam, 2026-08-23, after the closer
+  // crane landed: "I don't want the quote card overlapping with the die".
+  // The card's top edge measures at ~62% of viewport height at 1280x900 and
+  // ~68% in portrait, and the die's projected radius is ~11% of frame height
+  // at the reveal distance, so lifting the centre by 0.16 of frame height
+  // puts its bottom edge near 45% -- clear of the card by a sixth of the
+  // viewport, in both orientations.
+  const REVEAL_RISE = 0.16;
+
+  /**
+   * `REVEAL_RISE` converted from a fraction of frame height into world units
+   * at the aim plane, which is what revealCamera's `rise` wants. Half the
+   * frame height there is distance * tan(fov/2).
+   */
+  function revealRise(distance) {
+    return REVEAL_RISE * 2 * distance * Math.tan((PRESENT_FOV * Math.PI) / 360);
+  }
+
   /** The camera pose that presents face `index` of a die resting at `landedQuat`, at `landedPos`. */
   function computeReveal(mesh, index, landedQuat, landedPos) {
     const t = mesh.userData.faceUps[index];
     const texUpWorld = rotateByQuat([t.x, t.y, t.z], landedQuat);
+    const distance = revealDistance(landedPos);
     return revealCamera(texUpWorld, {
       tilt: REVEAL_TILT,
-      distance: revealDistance(landedPos),
+      distance,
       aim: landedPos,
+      rise: revealRise(distance),
     });
   }
 
@@ -1510,8 +1533,11 @@ export function createDiceStage(canvas, video) {
       wallHits: st.metrics?.wallHits ?? null,
       apex: st.metrics?.apex ?? null,
       apexHeights: st.metrics?.apexHeights ?? null,
+      apex2: st.metrics?.apex2 ?? null,
+      apex2Heights: st.metrics?.apex2Heights ?? null,
       dieHeight: st.metrics?.dieHeight ?? null,
-      kicked: st.metrics?.kicked ?? null,
+      kicks: st.metrics?.kicks ?? null,
+      tailSpin: st.metrics?.tailSpin ?? null,
       __hits: st.metrics?.__hits ?? null,
       heldFrames: 0,
     };
@@ -1728,17 +1754,22 @@ export function createDiceStage(canvas, video) {
     // being rebuilt, and this is the only physics whose result is kept.
     dieContact.restitution = restitutionFor(kind);
     const frames = [readFrame()];
-    // The rebound the first floor impact is normalized to. `apexTarget` is
-    // what the die is AIMED at; `apex` is what it reached, and the two differ
-    // by whatever the die was still doing on the way up.
-    const apexTarget = THROW.firstBounceHeights * dieHeight;
-    const kickSpeed = reboundSpeed(apexTarget, THROW.gravityY);
+    // The authored hops: one rebound target per counted floor impact, in
+    // die-heights, taken in order from THROW.bounceHeights. The die gets that
+    // many normalized rebounds and is on its own after them. What each hop is
+    // AIMED at is here; what it reached is `apex` / `apex2`, and the two
+    // differ by whatever the die was still doing on the way up.
+    const hopSpeeds = THROW.bounceHeights.map((h) =>
+      reboundSpeed(h * dieHeight, THROW.gravityY),
+    );
     const metrics = {
       flightMs: 0,
       bounces: 0,
       wallHits: 0,
       apex: 0,
       apexHeights: 0,
+      apex2: 0,
+      apex2Heights: 0,
       dieHeight: +dieHeight.toFixed(3),
     };
     let ms = 0;
@@ -1764,14 +1795,17 @@ export function createDiceStage(canvas, video) {
     // owns it. cannon-es dispatches `collide` BEFORE the solver runs, so the
     // velocity is still the pre-impact one there; by the time world.step()
     // returns, restitution has been applied and the vertical component is the
-    // one to overwrite. Fired exactly once, and `kicked` is what proves it.
+    // one to overwrite. `kicks` counts them; it must end at hopSpeeds.length.
     let kickArmed = false;
-    let kicked = false;
+    let kicks = 0;
     let kickMs = 0;
+    let kickSpeed = 0;
     const HOLD = THROW.firstBounceHold;
-    // Open from the kick until the die first starts falling again, so `apex`
-    // is the height of THE FIRST bounce and not of whatever came later.
+    // Open from a kick until the die starts falling again, so each hop's rise
+    // is measured against its own launch and not against whatever came later.
     let apexOpen = false;
+    // The rise of each authored hop, in world units, in order.
+    const rises = [];
     const counted = (last) => ms !== last && ms - last >= BOUNCE_REFRACTORY_MS;
     const onCollide = (e) => {
       const speed = Math.abs(e.contact.getImpactVelocityAlongNormal());
@@ -1786,7 +1820,14 @@ export function createDiceStage(canvas, video) {
           +Math.hypot(dieBody.position.x, dieBody.position.z).toFixed(2),
           +Math.hypot(dieBody.velocity.x, dieBody.velocity.z).toFixed(1),
         ]);
-        if (bounceY === null) {
+        // Author a rebound while hops remain. Each hop measures its own rise,
+        // so close the one still open if the die struck again before it had
+        // begun to fall.
+        if (kicks < hopSpeeds.length) {
+          if (apexOpen) {
+            rises.push(Math.max(0, peakY - bounceY));
+            apexOpen = false;
+          }
           bounceY = dieBody.position.y;
           peakY = bounceY;
           kickArmed = true;
@@ -1804,7 +1845,8 @@ export function createDiceStage(canvas, video) {
         ms += PHYS_STEP * 1000;
         if (kickArmed) {
           kickArmed = false;
-          kicked = true;
+          kickSpeed = hopSpeeds[kicks];
+          kicks += 1;
           apexOpen = true;
           kickMs = ms;
         }
@@ -1814,9 +1856,12 @@ export function createDiceStage(canvas, video) {
         // horizontal and angular keep the DIRECTION the contact produced and
         // lose only the magnitude the slam's friction impulse added. See the
         // note in physics-roll.js for why each of the three exists.
-        if (kicked && ms - kickMs <= HOLD.ms) {
+        if (kicks > 0 && ms - kickMs <= HOLD.ms) {
           const t = (ms - kickMs) / 1000;
-          const want = kickSpeed - Math.abs(THROW.gravityY) * t;
+          // The trajectory the die would be on had nothing touched it --
+          // damping included, so the hold gives back what a graze stole and
+          // never more than that.
+          const want = riseVelocityAt(kickSpeed, t);
           const v = dieBody.velocity;
           if (v.y < want) v.y = want;
           const carry = Math.hypot(v.x, v.z);
@@ -1836,7 +1881,10 @@ export function createDiceStage(canvas, video) {
         frames.push(readFrame());
         if (apexOpen) {
           if (dieBody.position.y > peakY) peakY = dieBody.position.y;
-          if (dieBody.velocity.y <= 0) apexOpen = false;
+          if (dieBody.velocity.y <= 0) {
+            rises.push(Math.max(0, peakY - bounceY));
+            apexOpen = false;
+          }
         }
         if (isSleepy(frames[frames.length - 1].lin, frames[frames.length - 1].ang)) break;
       }
@@ -1846,9 +1894,26 @@ export function createDiceStage(canvas, video) {
     // No counted bounce means no rebound to measure, which is a rise of zero
     // and not a missing reading: a throw that never struck the floor hard
     // enough to count has failed the bounce bound already.
-    metrics.apex = bounceY === null ? 0 : +Math.max(0, peakY - bounceY).toFixed(3);
-    metrics.apexHeights = +(metrics.apex / dieHeight).toFixed(3);
-    metrics.kicked = kicked;
+    if (apexOpen) rises.push(Math.max(0, peakY - bounceY));
+    metrics.apex = +(rises[0] ?? 0).toFixed(3);
+    metrics.apexHeights = +((rises[0] ?? 0) / dieHeight).toFixed(3);
+    metrics.apex2 = +(rises[1] ?? 0).toFixed(3);
+    metrics.apex2Heights = +((rises[1] ?? 0) / dieHeight).toFixed(3);
+    metrics.kicks = kicks;
+    // How fast the die is still turning as it comes to rest. This is NOT a
+    // bound -- Cam's ruling is maximum visible spin ("i want that shit
+    // SPINNING"), so a die that keeps turning into the tail is the goal and
+    // this number is the evidence for it, reported and never failed on.
+    const spinOver = (windowMs) => {
+      const n = Math.min(frames.length, Math.round(windowMs / (PHYS_STEP * 1000)));
+      let m = 0;
+      for (let i = frames.length - n; i < frames.length; i++) {
+        const a = frames[i].ang;
+        m = Math.max(m, Math.hypot(a[0], a[1], a[2]));
+      }
+      return +m.toFixed(2);
+    };
+    metrics.tailSpin = spinOver(100);
     metrics.flightMs = Math.round(ms);
     frames.metrics = metrics;
     return frames;
@@ -2102,18 +2167,42 @@ export function createDiceStage(canvas, video) {
         wallHits: lastRoll?.wallHits ?? null,
         // How far the die rose off its first counted bounce, in world units
         // and in die-heights. That bounce is authored, so `apexHeights` is
-        // the compliance number: it should sit on THROW.firstBounceHeights.
+        // compliance numbers: they sit on the entries of THROW.bounceHeights.
         apex: lastRoll?.apex ?? null,
         apexHeights: lastRoll?.apexHeights ?? null,
+        apex2: lastRoll?.apex2 ?? null,
+        apex2Heights: lastRoll?.apex2Heights ?? null,
         dieHeight: lastRoll?.dieHeight ?? null,
-        // Whether the authored kick fired on this roll. Exactly once, always.
-        kicked: lastRoll?.kicked ?? null,
+        // How many authored rebounds fired. Always THROW.bounceHeights.length.
+        kicks: lastRoll?.kicks ?? null,
+        // Angular speed near rest. Evidence of spin, not a gate.
+        tailSpin: lastRoll?.tailSpin ?? null,
         __hits: lastRoll?.__hits ?? null,
         heldFrames: lastRoll?.heldFrames ?? null,
         craneMs: CRANE_MS,
         holdMs: HOLD_MS,
         fov: +camera.fov.toFixed(2),
         camY: +camera.position.y.toFixed(3),
+        // Where the die actually lands on screen, in CSS pixels, with the
+        // radius its silhouette projects to. The quote card must not reach
+        // `y + r`; that is the gate Cam's "no overlap" ruling turned into a
+        // number, and it is measured rather than assumed because it depends
+        // on the reveal distance, the rise, and the aspect all at once.
+        dieScreen: (() => {
+          if (!die) return null;
+          const w = canvas.clientWidth || 1;
+          const h = canvas.clientHeight || 1;
+          const c = die.position.clone().project(camera);
+          const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+          const e = die.position.clone().addScaledVector(right, dieHeight / 2).project(camera);
+          return {
+            x: +(((c.x + 1) / 2) * w).toFixed(1),
+            y: +(((1 - c.y) / 2) * h).toFixed(1),
+            r: +Math.hypot(((e.x - c.x) / 2) * w, ((e.y - c.y) / 2) * h).toFixed(1),
+            vw: w,
+            vh: h,
+          };
+        })(),
         cam: [+camera.position.x.toFixed(2), +camera.position.y.toFixed(2), +camera.position.z.toFixed(2)],
         up: [+camera.up.x.toFixed(2), +camera.up.y.toFixed(2), +camera.up.z.toFixed(2)],
       };

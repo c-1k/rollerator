@@ -146,8 +146,8 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
       expect(d.bounces, `${kind} bounces ${d.bounces}`).toBeLessThanOrEqual(6);
       // `apex` is how far the die rose off its first counted bounce, and
       // `apexHeights` is that in die-heights. Unlike the other throw numbers
-      // this one is AUTHORED — the silent sim normalizes the first rebound to
-      // THROW.firstBounceHeights — so a single roll can be held to it
+      // this one is AUTHORED — the silent sim normalizes the first two
+      // rebounds to THROW.bounceHeights — so a single roll can be held to it
       // directly rather than left to the soak's distribution. The band is
       // wider here than the soak's (3.5–4.5) only because this is one roll a
       // die and a rare contact-eaten kick should not turn the suite red.
@@ -155,8 +155,8 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
         typeof d.apex === "number" && Number.isFinite(d.apex),
         `${kind} reported no apex (${d.apex}) — the rebound-height metric is not wired`,
       ).toBe(true);
-      expect(d.kicked, `${kind} did not fire the authored first bounce`).toBe(
-        true,
+      expect(d.kicks, `${kind} fired ${d.kicks} authored bounces, not 2`).toBe(
+        2,
       );
       expect(
         d.apexHeights,
@@ -166,6 +166,22 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
         d.apexHeights,
         `${kind} first bounce ${d.apexHeights} die-heights (die ${d.dieHeight} u)`,
       ).toBeLessThanOrEqual(4.8);
+      // The second hop is authored too, at half the first. Same reasoning for
+      // the widened band: one roll, not a distribution.
+      expect(
+        d.apex2Heights,
+        `${kind} second bounce ${d.apex2Heights} die-heights (die ${d.dieHeight} u)`,
+      ).toBeGreaterThanOrEqual(1.5);
+      expect(
+        d.apex2Heights,
+        `${kind} second bounce ${d.apex2Heights} die-heights (die ${d.dieHeight} u)`,
+      ).toBeLessThanOrEqual(2.5);
+      // ...and it must READ as the smaller of the two, or the chain looks
+      // like two throws rather than a bounce settling out.
+      expect(
+        d.apex2Heights,
+        `${kind} second bounce ${d.apex2Heights} did not come in under the first ${d.apexHeights}`,
+      ).toBeLessThan(d.apexHeights);
       expect(
         d.heldFrames,
         `${kind} held ${d.heldFrames} frames — the replay stuttered`,
@@ -212,6 +228,33 @@ test("switching environment clears the previous result; resizing keeps the revea
     null,
     { timeout: 15_000 },
   );
+
+  // The quote card must not land on top of the die. The crane ends close
+  // enough that a dead-centre reveal would put the die behind the card, so
+  // the reveal lifts the die into the upper part of the frame; this is that
+  // ruling as a number. Measured in CSS pixels: the die's projected bottom
+  // edge (centre plus projected radius) against the card's own top edge.
+  {
+    const gap = await page.evaluate(() => {
+      const d = window.__dice.debug();
+      const card = document.querySelector("#hort").getBoundingClientRect();
+      return {
+        bottom: d.dieScreen.y + d.dieScreen.r,
+        top: card.top,
+        vh: d.dieScreen.vh,
+      };
+    });
+    expect(
+      gap.bottom,
+      `the die reaches ${gap.bottom.toFixed(1)}px and the quote card starts at ${gap.top.toFixed(1)}px — they overlap`,
+    ).toBeLessThan(gap.top);
+    // Not merely non-overlapping: clear by a visible margin, so a slightly
+    // taller quote or a slightly different rest height cannot close the gap.
+    expect(
+      (gap.top - gap.bottom) / gap.vh,
+      `die-to-card gap is only ${(((gap.top - gap.bottom) / gap.vh) * 100).toFixed(1)}% of the viewport height`,
+    ).toBeGreaterThan(0.04);
+  }
 
   // Invariant 4: the result stays presented across a resize. The die keeps its
   // physics rest pose, so the camera -- not the die -- has to re-frame for the

@@ -22,23 +22,34 @@
  *     (its own 0.82 plus 0.3 of margin), which is the bound the soak and
  *     e2e hold it to.
  *
- * Two limits bound how far `radius` can grow, both checked at 3.9:
+ * Two limits bound how far `radius` can grow, both checked at 4.0:
  *   - The flight camera (dropCam 13.6 up, DROP_FOV 54 vertical, 1280x900)
  *     sees +-6.93 in z and +-9.86 in x, so the ring must stay inside that
  *     or a die can land off screen. Nowhere near binding.
  *   - The shadow-catcher disc (radius 5.0) has to be under the die wherever
  *     the die can STOP, plus the die's own 0.82 of shadow: that is
- *     3.9 - 1.12 + 0.82 = 3.60 against 5.0. It is not scenery and does not
+ *     4.0 - 1.12 + 0.82 = 3.70 against 5.0. It is not scenery and does not
  *     have to reach the wall. Grow the disc with the ring.
  *
- * `firstBounceHeights` is the ONE authored number in the throw. Restitution
+ * In practice the ring is now a backstop and little else. The tuned profile
+ * rests the die at a median radius under 1.0 and a p95 under 1.8, so a wall
+ * touch is rare (measured 0 per roll on every die at N=10) -- which is what
+ * an invisible barrier should be. The bound the soak holds is containment;
+ * `restRadiusMedian` / `restRadiusP95` over in the soak are the ones that
+ * say the result reads as centred.
+ *
+ * `bounceHeights` is the authored spine of the throw. Restitution
  * cannot lift a die four of its own heights off a hand-height drop -- that
  * needs e ~ 1.6 -- so the launch slams the die down at ~76-80 u/s and the
- * silent simulation normalizes the vertical velocity of the FIRST counted
- * floor impact to sqrt(2 * |gravityY| * heights * dieHeight). Everything
- * after that impact is pure physics decaying at `contact.restitution`.
- * Determinism is untouched: the kick happens inside the sim whose frames
- * become the replay.
+ * silent simulation normalizes the vertical velocity of the first
+ * `bounceHeights.length` counted floor impacts, each to whatever speed
+ * actually reaches its own target height. That speed is
+ * sqrt(2 g h) only in a world with no linear damping; in this one it is the
+ * inverse of `dampedRise`, which is what keeps the authored four die-heights
+ * an honest four rather than the 3.7 the ballistic figure delivers. See
+ * `reboundSpeed`. Everything after that impact is pure physics, decaying at
+ * `contact.restitution`. Determinism is untouched: the kick happens inside
+ * the sim whose frames become the replay.
  *
  * `firstBounceHold` is what makes the kick survive the contact it fires out
  * of, and it is not decoration -- without it the measured first bounce ran
@@ -69,18 +80,37 @@ export const THROW = {
   physStep: 1 / 240,
   flightMaxMs: 2500,
   arena: { radius: 4.0, planes: 16 },
-  // The first bounce, in die-heights, where one die-height is the body's
-  // circumsphere diameter. Authored, not simulated -- see the note above.
-  firstBounceHeights: 4,
-  firstBounceHold: { ms: 55, carry: 2.6, spin: 22 },
+  // The authored hops, in die-heights, where one die-height is the body's
+  // circumsphere diameter. One entry per counted floor impact, in order:
+  // the first strike leaps 4, the second leaps 2, and every impact after
+  // them is pure physics. Authored, not simulated -- see the note above.
+  //
+  // The second entry exists because restitution alone gave the second hop
+  // whatever was left over, which read as the die giving up after one big
+  // leap. Cam, 2026-08-23: "the second bounce needs to be higher." Half the
+  // first is deliberate -- it reads as a bounce chain rather than as two
+  // separate throws.
+  bounceHeights: [4, 2],
+  firstBounceHold: { ms: 55, carry: 0.4, spin: 30 },
   // A floor contact slower than this is the die settling, not striking, so it
-  // is not a bounce. Scales with gravity: at -48 the old 0.8 was right; at
-  // -120 the first impact is 12-15 u/s and 0.8 counts terminal rocking.
-  bounceSpeed: 2.2,
+  // is not a bounce. The number is not a feel knob, it is arithmetic: a
+  // contact at v rebounds to (e*v)^2 / (2|g|), so at `restitution` 0.08 and
+  // gravity -120 a 5 u/s tap comes back up 0.0007 units -- seven ten-thousandths
+  // of a unit against a die 1.6 across, which no viewer can see and no honest
+  // bounce count should include. Even an 18 u/s knock only makes 0.009. It was
+  // 2.2, and at that threshold a die that visibly bounced twice scored six to
+  // eight because every terminal rock counted.
+  bounceSpeed: 5.0,
   launch: {
     x: [-0.28, 0.28],
     y: [2.4, 2.8],
-    z: [0.78, 0.98],
+    // Nearer the middle than a hand would be. The die is only airborne for
+    // 25 ms before it strikes, so this IS where the slam lands, and the leap
+    // that follows goes almost straight up -- which means the rest position
+    // is this point plus the roll-out, and pulling it in moves every landing
+    // in with it. Was [0.78, 0.98] until Cam asked on 2026-08-23 for the
+    // final resting position to read more centred.
+    z: [0.15, 0.45],
     vx: [-0.22, 0.22],
     // Downward, hard. This is the slam: ~70-76 u/s of throw on top of the
     // fall, arriving at ~76-80. It buys no bounce height (that is authored)
@@ -88,17 +118,33 @@ export const THROW = {
     // it, and the friction impulse that comes with an impact that size.
     vy: [-76, -70],
     vz: [-2.8, -2.2],
-    // Fast enough to see turning in the first frames off the click. The old
-    // [6, 4, 6] was a tumble you had to look for.
-    spin: [17, 12, 17],
+    // Unmistakable tumbling in the first frames off the click -- Cam rolled
+    // the rough build and asked for more of it. Those first frames are all
+    // there is before the slam, so this is what "release" reads as; the
+    // tumble through the leap after it is this decayed by `damping.angular`.
+    // [6, 4, 6] was a tumble you had to look for and [17, 12, 17] still was
+    // at the speed the slam moves.
+    spin: [26, 18, 26],
   },
   // `restitution` governs every bounce AFTER the authored first one, so it is
-  // a decay rate now rather than a bounce-height lever: at 0.42 the chain
-  // goes 4 die-heights, then ~0.7, then ~0.12, and is done. `restitutionByKind`
-  // overrides it for a die that needs its own -- the seven solids do not
-  // shed energy alike, a tetrahedron landing on a big flat face dumps roughly
-  // twice as much as a d12. Spec section 10 excluded per-die profiles;
-  // amended by ruling 2026-08-23 for this one field.
+  // a decay rate rather than a bounce-height lever -- and it is also the size
+  // of the impulse the big landing delivers, which matters more than the
+  // rebound does. The die comes down off four die-heights at ~38 u/s and it
+  // lands on a CORNER, and a corner impact turns a vertical impulse into
+  // sideways motion and spin: measured at 0.9 u/s and 0.9 rad/s in the frame
+  // before contact, 11.7 u/s and 15.8 rad/s in the frame after. That squirt,
+  // not the flight, is what used to carry the die to the ring -- it would
+  // then roll outward for 450 ms and cover 2.6 units. It sits at 0.35: low
+  // enough that the tail after the two authored hops dies inside about half
+  // a second, which is the budget those hops leave under the click ceiling,
+  // and high enough that what follows them still reads as bouncing rather
+  // than as the die being switched off.
+  //
+  // `restitutionByKind` overrides it for a die that needs its own -- the
+  // seven solids do not shed energy alike, a tetrahedron landing on a big
+  // flat face dumps roughly twice as much as a d12. Spec section 10 excluded
+  // per-die profiles; amended by ruling 2026-08-23 for this one field. It is
+  // empty: the tuned profile brought all seven inside the bounds without it.
   //
   // `wall` is the ring, and it is deliberately dead: a die that reaches the
   // wall should be absorbed and turned back, not returned. Restitution 0.08
@@ -106,13 +152,62 @@ export const THROW = {
   // which is what stops an invisible plane from reading as a ping off air.
   contact: {
     friction: 0.7,
-    restitution: 0.34,
-    restitutionByKind: {},
+    restitution: 0.3,
+    // The d12 and the d20 are the two roundest solids here and the only two
+    // that needed their own number: on twelve pentagons and twenty triangles
+    // they roll instead of settling, and at the shared 0.3 they were the dice
+    // whose flight p95 ran past the band and whose rests wandered furthest
+    // out, while the other five sat comfortably inside both. Taking their
+    // rebound down shortens the chain and the roll-out together, without
+    // touching the dice that did not need it.
+    restitutionByKind: { d12: 0.2, d20: 0.2 },
     wall: { friction: 2.0, restitution: 0.08 },
   },
-  damping: { linear: 0.0, angular: 0.86 },
+  // Both of these are containment, not weather.
+  //
+  // `linear` is the only thing that takes horizontal speed away from a die
+  // that is off the floor, and more to the point it is what stops the ground
+  // roll after the big landing. It costs the leap NOTHING, because
+  // `reboundSpeed` inverts it -- see the note there. Before that inversion
+  // existed this number had to stay under ~0.45 or the authored four
+  // die-heights quietly became three and a half, which is outside the +-10%
+  // the bounce was ruled to hold.
+  //
+  // `angular` is NOT a containment lever and must not be used as one. It was
+  // briefly raised to 0.97 to shorten the ground roll, and that bought a
+  // little centring at the cost of the tumble -- Cam noticed immediately and
+  // ruled the other way: "i want that shit SPINNING". It is back at the 0.86
+  // the throw was built with, the die turns visibly through the flight, both
+  // hops and the tail, and the centring is bought entirely with `linear`,
+  // `firstBounceHold.carry` and the launch position instead.
+  damping: { linear: 0.85, angular: 0.86 },
+  // The settle ramp. `damping.angular` is tuned for the flight, where the
+  // tumble is the point; it is too soft for the last stretch, where the die
+  // should look like it is coming to rest. Cam rolled the raised-spin build
+  // and called the die "really spinny" -- measured, that is 2-5 rad/s still
+  // turning through the final 100 ms, and on a d4 a brief 33 rad/s flip as
+  // the tetrahedron slaps onto its face.
+  //
+  // `afterMs` since the last COUNTED floor impact is what says the die has
+  // stopped bouncing and started settling -- it cannot be "after the last
+  // bounce" because nothing knows which bounce was last until the roll is
+  // over. Over `rampMs` the angular damping eases from the flight value to
+  // `angular`, so the tumble bleeds off instead of being frozen. It is a
+  // ramp and not a switch precisely so the die never stops rotating in one
+  // frame, which reads worse than the twirl it replaces.
   sleep: { speedLimit: 0.7, timeLimit: 0.14 },
-  rest: { lin: 0.002, ang: 0.006 },
+  // When the silent simulation stops recording, in units/s and rad/s. These
+  // are "imperceptible", not "numerically zero", and the difference is most
+  // of a second of flight time. At ang 1.0 the die turns just under a degree
+  // per 60 fps frame and at lin 0.3 it creeps 0.005 units -- a three
+  // hundredth of its own width -- so the frame where recording stops is
+  // indistinguishable from the frame before it. The old 0.006 rad/s asked the die to be still
+  // to four decimal places, and because Cam's ruling keeps the die spinning
+  // (`damping.angular`), a die that is visibly at rest but still turning
+  // gently could not satisfy it: cannon-es will not sleep a body whose spin
+  // keeps it awake, so the sim ran on to the flight cap. That, not the bounce
+  // chain, was what put d10/d12/d20 over the flight band.
+  rest: { lin: 0.3, ang: 1.0 },
 };
 
 /**
@@ -140,11 +235,85 @@ export function arenaPlanes(radius, count) {
 }
 
 /**
- * The vertical speed a rebound needs to reach `height` under `gravityY`.
- * The authored first bounce is this and nothing else: v = sqrt(2 g h).
+ * cannon-es applies linear damping as `v *= (1 - d) ** dt` once per step and
+ * then adds gravity, which in the limit is dv/dt = -lambda*v - g for
+ * lambda = -ln(1 - d). This is that lambda; at d = 0 it is 0 and every
+ * formula below collapses to the ballistic one.
  */
-export function reboundSpeed(height, gravityY = THROW.gravityY) {
-  return Math.sqrt(2 * Math.abs(gravityY) * Math.max(0, height));
+function dragRate(linearDamping) {
+  return linearDamping > 0 ? -Math.log(1 - linearDamping) : 0;
+}
+
+/**
+ * How high a body launched straight up at `v0` actually gets, against both
+ * gravity and linear damping:
+ *
+ *     h = v0/lambda - (g/lambda^2) * ln(1 + lambda*v0/g)
+ *
+ * which tends to the familiar v0^2/(2g) as lambda goes to zero.
+ */
+export function dampedRise(v0, gravityY = THROW.gravityY, linearDamping = THROW.damping.linear) {
+  const g = Math.abs(gravityY);
+  const lambda = dragRate(linearDamping);
+  if (lambda === 0) return (v0 * v0) / (2 * g);
+  return v0 / lambda - (g / (lambda * lambda)) * Math.log(1 + (lambda * v0) / g);
+}
+
+/**
+ * The vertical speed a rebound needs in order to reach `height`.
+ *
+ * With no linear damping this is sqrt(2 g h) and nothing else. With damping
+ * it is MORE than that, because the die is being slowed on the way up as
+ * well as pulled down, and the authored first bounce is a promise about the
+ * height the die reaches -- not about the speed it leaves at. Feeding the
+ * ballistic speed into a damped world lands the die short: at the profile's
+ * own damping the measured apex came out at 3.7 die-heights against an
+ * authored 4, which is outside the +-10% the bounce was ruled to hold.
+ *
+ * `dampedRise` is strictly increasing in v0, so invert it by bisection from
+ * the ballistic speed, which always undershoots and so is a safe lower bound.
+ */
+export function reboundSpeed(
+  height,
+  gravityY = THROW.gravityY,
+  linearDamping = THROW.damping.linear,
+) {
+  const g = Math.abs(gravityY);
+  const h = Math.max(0, height);
+  const ballistic = Math.sqrt(2 * g * h);
+  if (dragRate(linearDamping) === 0 || h === 0) return ballistic;
+  let lo = ballistic;
+  let hi = ballistic * 2;
+  while (dampedRise(hi, gravityY, linearDamping) < h) hi *= 2;
+  for (let i = 0; i < 100; i++) {
+    const mid = (lo + hi) / 2;
+    if (dampedRise(mid, gravityY, linearDamping) < h) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
+/**
+ * The upward speed of a body that left at `v0`, `t` seconds later:
+ *
+ *     v(t) = (v0 + g/lambda) * e^(-lambda*t) - g/lambda
+ *
+ * which is v0 - g*t when there is no damping. This is what the kick's hold
+ * defends against grazing contacts: the value the die WOULD have if nothing
+ * had touched it, so holding to it costs nothing on a clean rise and gives
+ * back exactly what a graze stole. Using the ballistic line in a damped
+ * world would hold the die ABOVE its true trajectory and quietly add energy.
+ */
+export function riseVelocityAt(
+  v0,
+  t,
+  gravityY = THROW.gravityY,
+  linearDamping = THROW.damping.linear,
+) {
+  const g = Math.abs(gravityY);
+  const lambda = dragRate(linearDamping);
+  if (lambda === 0) return v0 - g * t;
+  return (v0 + g / lambda) * Math.exp(-lambda * t) - g / lambda;
 }
 
 export const LIN_SLEEP = THROW.rest.lin;
@@ -367,14 +536,26 @@ export function landedValue(normals, quat, values, worldUp = [0, 1, 0]) {
  * lookAt undefined there, while this vector is never parallel to the view
  * axis for any tilt below 90 degrees and yields the identical screen-up.
  *
+ * `rise` slides the whole rig along screen-down so the subject sits ABOVE
+ * the middle of the frame. The camera and its aim move together by the same
+ * vector, so the die does not move and the distance and tilt are unchanged --
+ * only where the die falls inside the viewport changes. It exists because
+ * the quote card occupies a band across the bottom of the page, and a die
+ * presented dead-centre lands underneath it. `rise` is in world units at the
+ * aim plane; the caller converts a fraction of frame height into that.
+ *
+ * The shift is along `s`, which lies in the ground plane, so it never
+ * changes the aim's height and cannot dip the camera toward the floor.
+ *
  * @param texUpWorld  [x,y,z] numeral-up of the landed face, in world space
  * @param opts.tilt      radians off vertical; 0 = straight overhead
  * @param opts.distance  camera distance from aim
  * @param opts.aim       [x,y,z] the point the camera looks at
+ * @param opts.rise      world units to lift the subject above frame centre
  * @param opts.worldUp   [x,y,z], default [0,1,0]
  * @returns { position: [x,y,z], up: [x,y,z], aim: [x,y,z] }
  */
-export function revealCamera(texUpWorld, { tilt, distance, aim, worldUp = [0, 1, 0] }) {
+export function revealCamera(texUpWorld, { tilt, distance, aim, rise = 0, worldUp = [0, 1, 0] }) {
   const n = normalize(worldUp);
   let s = projectOnPlane(texUpWorld, n);
   // A face that is itself world-up always has a ground component, but guard
@@ -384,14 +565,17 @@ export function revealCamera(texUpWorld, { tilt, distance, aim, worldUp = [0, 1,
   // Numeral-up must point away from the camera, so the camera sits at -s.
   const horizontal = scale(s, -distance * Math.sin(tilt));
   const vertical = scale(n, distance * Math.cos(tilt));
+  // Screen-up is +s, so aiming at a point `rise` along -s leaves the die
+  // sitting `rise` above the centre of the frame.
+  const at = [aim[0] - s[0] * rise, aim[1] - s[1] * rise, aim[2] - s[2] * rise];
   return {
     position: [
-      aim[0] + horizontal[0] + vertical[0],
-      aim[1] + horizontal[1] + vertical[1],
-      aim[2] + horizontal[2] + vertical[2],
+      at[0] + horizontal[0] + vertical[0],
+      at[1] + horizontal[1] + vertical[1],
+      at[2] + horizontal[2] + vertical[2],
     ],
     up: s,
-    aim: [aim[0], aim[1], aim[2]],
+    aim: at,
   };
 }
 
