@@ -14,6 +14,15 @@
  * ejects it. That defect is what the 3.44 x 3.24 tray and z up to 1.4 used to
  * produce on most rolls.
  *
+ * Two limits bound how far `tray` can grow, both checked at 3.0 x 2.8:
+ *   - The flight camera (dropCam 13.6 up, DROP_FOV 54 vertical) sees +-6.93
+ *     in z and +-9.86 in x, so the tray must stay inside that or a die can
+ *     land off screen.
+ *   - The shadow-catcher disc has radius 3.4. It no longer reaches the tray's
+ *     corners (hypot(3.0, 2.8) = 4.10), which is fine, but it must still
+ *     cover every position the die can REST in -- landing clearance keeps its
+ *     centre inside hypot(3.0 - 1.12, 2.8 - 1.12) = 2.94.
+ *
  * Values are the tuned result of the soak in the plan's Task 5.
  */
 export const THROW = {
@@ -21,6 +30,10 @@ export const THROW = {
   physStep: 1 / 120,
   flightMaxMs: 2500,
   tray: { x: 3.0, z: 2.8 },
+  // A floor contact slower than this is the die settling, not striking, so it
+  // is not a bounce. Scales with gravity: at -48 the old 0.8 was right; at
+  // -120 the first impact is 12-15 u/s and 0.8 counts terminal rocking.
+  bounceSpeed: 2.2,
   launch: {
     x: [-0.28, 0.28],
     y: [1.5, 1.9],

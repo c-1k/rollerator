@@ -1113,8 +1113,7 @@ export function createDiceStage(canvas, video) {
   let camTween = 0;
   let lastTick = performance.now();
   const PHYS_STEP = THROW.physStep;
-  // A contact slower than this is the die settling, not striking.
-  const IMPACT_SPEED_FLOOR = 2.2;
+  const IMPACT_SPEED_FLOOR = THROW.bounceSpeed;
   // How long after a counted impact further contacts belong to the same one.
   // Well above PHYS_STEP (8.3 ms), so the contact points of one landing always
   // collapse together; well below the gap between real bounces.
@@ -1725,10 +1724,22 @@ export function createDiceStage(canvas, video) {
       }
       const frames = st.replay;
       const last = frames.length - 1;
-      // Real time, always. The old energy-ramped slow-mo displayed recorded
-      // frames at 22% speed with a floor-index lookup — ~13 fps and every
-      // near-rest jitter held five times longer. Interpolate instead.
-      st.replayT += dt;
+      // Real time, always — and real time means the WALL clock, not `tick`'s
+      // dt. The old energy-ramped slow-mo displayed recorded frames at 22%
+      // speed with a floor-index lookup — ~13 fps and every near-rest jitter
+      // held five times longer. Interpolate instead.
+      //
+      // `tick` clamps dt at 50 ms so the dead live-physics path cannot take a
+      // huge step. Advancing the replay by that clamped value re-introduced
+      // the same defect through the back door: on any renderer below 20 fps
+      // the replay clock falls behind the wall clock and the throw plays in
+      // slow motion. Measured at 0.30-0.73x under SwiftShader. Read the wall
+      // clock directly instead, capped at 250 ms so a backgrounded tab cannot
+      // fast-forward the whole throw on its first frame back; interpolation
+      // makes the larger steps smooth.
+      const wallMs = st.lastTickNow == null ? 0 : Math.min(250, now - st.lastTickNow);
+      st.lastTickNow = now;
+      st.replayT += wallMs / 1000;
       const exact = st.replayT / PHYS_STEP;
       const i = Math.min(last, Math.floor(exact));
       st.replayI = i;
@@ -1796,6 +1807,8 @@ export function createDiceStage(canvas, video) {
       replay: null,
       replayI: 0,
       replayT: 0,
+      // Wall clock of the previous replay tick; null until the first one.
+      lastTickNow: null,
       metrics: null,
       heldFrames: 0,
       lastPose: null,

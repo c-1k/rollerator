@@ -14,9 +14,13 @@
  * because the walls are built from THROW.tray and a literal here would go on
  * reporting "clear of the wall" after the tray moved.
  *
- *   node scripts/throw-soak.mjs            # 10 rolls per die, full mode
- *   node scripts/throw-soak.mjs 20 --fast  # 20 rolls per die, tuning mode
- *   node scripts/throw-soak.mjs 10 --env=ice
+ *   node scripts/throw-soak.mjs            # 20 rolls per die, full mode
+ *   node scripts/throw-soak.mjs 40 --fast  # 40 rolls per die, tuning mode
+ *   node scripts/throw-soak.mjs 20 --env=ice
+ *
+ * 20 a die is the default because 10 cannot resolve these bounds: an
+ * identical profile measured twice at N=10-20 came out 2 violations then 5.
+ * A full-mode run at 20 takes about 20 minutes.
  *
  * Two modes, and the difference matters:
  *
@@ -52,7 +56,7 @@ const flags = argv.filter((a) => a.startsWith("--"));
 const FAST = flags.includes("--fast");
 const ENV =
   flags.find((f) => f.startsWith("--env="))?.slice("--env=".length) ?? "siege";
-const N = Number(positional[0] ?? 10);
+const N = Number(positional[0] ?? 20);
 
 if (!Number.isInteger(N) || N < 1) {
   console.error(`Rolls per die must be a positive integer, got "${N}".`);
@@ -250,36 +254,11 @@ try {
     // where the value is reported) and the DOM's (click to #hort visible).
     let toCrane = null;
     let toNumber = null;
-    let flightWallMs = null;
-    let timedFlightMs = null;
     if (!FAST) {
       // A #hort left over from the previous die would satisfy the wait below
       // instantly and report a time-to-number of nothing at all, so prove it
       // is hidden before starting the clock.
       await page.locator("#hort").waitFor({ state: "hidden", timeout: 15_000 });
-      // Time the replay phase from inside the page as well as the click from
-      // outside it. `tick` clamps dt at 50 ms, so on a renderer slower than
-      // 20 fps the replay clock falls behind the wall clock and the throw
-      // plays in slow motion -- which inflates the click-to-number time by an
-      // amount that has nothing to do with the throw. Measuring the flight's
-      // wall time is what lets that be subtracted back out, and reported.
-      const observer = page.evaluate(
-        () =>
-          new Promise((done) => {
-            let start = null;
-            const tick = () => {
-              const p = window.__dice.debug().phase;
-              if (start === null) {
-                if (p === "flight") start = performance.now();
-              } else if (p !== "flight") {
-                done(Math.round(performance.now() - start));
-                return;
-              }
-              requestAnimationFrame(tick);
-            };
-            requestAnimationFrame(tick);
-          }),
-      );
       const t0 = Date.now();
       await page.click("#roll");
       await page.waitForFunction(
@@ -292,20 +271,12 @@ try {
         .locator("#hort")
         .waitFor({ state: "visible", timeout: 60_000 });
       toNumber = Date.now() - t0;
-      flightWallMs = await observer;
       await page.waitForFunction(
         () => window.__dice.debug().phase === "idle",
         null,
         { timeout: 30_000 },
       );
-      timedFlightMs = await page.evaluate(() => window.__dice.debug().flightMs);
     }
-    // What a player on a renderer that keeps up would have waited: the same
-    // click-to-number, with the replay's slow-motion surplus taken out.
-    const projected =
-      FAST || flightWallMs == null
-        ? null
-        : Math.round(toNumber - flightWallMs + timedFlightMs);
 
     const flights = samples.map((s) => s.flightMs);
     const bounces = samples.map((s) => s.bounces);
@@ -333,8 +304,6 @@ try {
       maxZ,
       toCrane,
       toNumber,
-      projected,
-      replaySpeed: flightWallMs ? timedFlightMs / flightWallMs : null,
     };
     rows.push(row);
 
@@ -367,15 +336,12 @@ try {
       fail(`landed ${round(maxX - clearX)} past the x landing bound`);
     if (maxZ > clearZ)
       fail(`landed ${round(maxZ - clearZ)} past the z landing bound`);
-    // Held against the projection, not the raw wall clock: under SwiftShader
-    // this scene renders at ~6 fps and the dt clamp turns the replay into
-    // slow motion, so the raw figure measures the renderer. The projection
-    // still fails if the THROW is too long, which is the thing being tuned.
-    if (!FAST && projected > BOUNDS.timeToNumberMs)
-      fail(
-        `click to number ${projected} ms > ${BOUNDS.timeToNumberMs} ` +
-          `(raw ${toNumber} ms at ${round(timedFlightMs / flightWallMs, 2)}x replay speed)`,
-      );
+    // The raw wall clock, and nothing else. It used to need correcting for
+    // renderer speed because the replay advanced by tick's clamped dt and so
+    // ran slow on a slow renderer; the replay now reads the wall clock
+    // directly, so this number is honest as measured.
+    if (!FAST && toNumber > BOUNDS.timeToNumberMs)
+      fail(`click to number ${toNumber} ms > ${BOUNDS.timeToNumberMs}`);
 
     console.log(
       `\n  ${kind.padEnd(4)} flightMs  med ${String(round(row.med, 0)).padStart(5)}` +
@@ -393,8 +359,7 @@ try {
     );
     if (!FAST)
       console.log(
-        `       click to  #hort ${toNumber} ms raw, ${projected} ms at 1x replay` +
-          ` (this renderer replayed at ${round(row.replaySpeed, 2)}x)`,
+        `       click to  #hort ${toNumber} ms   (value reported at ${toCrane} ms)`,
       );
   }
 

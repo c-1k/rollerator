@@ -127,10 +127,16 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
       ).toBeGreaterThan(1 - 1e-6);
 
       // The throw itself (spec §8): a real throw, smooth, inside the tray.
+      // This is a one-roll-per-die test, so each bound has to sit clear of the
+      // distribution's TAIL, not of its median — the soak is what holds the
+      // distribution. 300 rather than 400 because d4's tail reaches 367 ms:
+      // a tetrahedron lands on a big flat face and stops, and a floor inside
+      // its tail is a flake, not a check. The median band in the soak is what
+      // actually holds the throw to length.
       expect(
         d.flightMs,
         `${kind} flight ${d.flightMs} ms`,
-      ).toBeGreaterThanOrEqual(400);
+      ).toBeGreaterThanOrEqual(300);
       expect(d.flightMs, `${kind} flight ${d.flightMs} ms`).toBeLessThanOrEqual(
         1800,
       );
