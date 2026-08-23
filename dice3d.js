@@ -977,9 +977,9 @@ export function createDiceStage(canvas, video) {
   const IDLE_FOV = 44;
   const DROP_FOV = 54;
   const PRESENT_FOV = 44;
-  // Reveal tilt off the vertical. Kept at 0 until Task 4 so the picture is
-  // unchanged while the mechanism underneath it is replaced.
-  const REVEAL_TILT = 0;
+  // Reveal tilt off the vertical. Chosen 2026-08-22 from real renders at
+  // 0 / 15 / 25 degrees; see the spec's decision record (section 8).
+  const REVEAL_TILT = (15 * Math.PI) / 180;
   const TAIL_MS = 1600;
   const camera = new THREE.PerspectiveCamera(IDLE_FOV, 1, 0.1, 80);
   const idleCam = new THREE.Vector3(0, 8.2, 0);
