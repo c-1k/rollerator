@@ -13,6 +13,7 @@ import {
   FLIGHT_MAX_MS,
   GRAVITY_Y,
   HOLD_MS,
+  REST_BEAT_MS,
   THROW,
   arenaPlanes,
   faceValueTable,
@@ -1611,7 +1612,23 @@ export function createDiceStage(canvas, video) {
 
   function finishLanding(st, now) {
     captureLanded(st);
-    beginCrane(st, now);
+    beginBeat(st, now);
+  }
+
+  /**
+   * The die is down. Freeze it where it landed and let it sit there for
+   * REST_BEAT_MS before anything else moves -- no camera, no number. The
+   * freeze happens HERE rather than in `beginCrane` so the die is genuinely
+   * still for the whole beat: the last replay frame can still carry a
+   * sub-threshold drift, and a beat spent creeping is not a beat spent at
+   * rest.
+   */
+  function beginBeat(st, now) {
+    st.phase = "beat";
+    st.beatT0 = now;
+    st.mesh.position.set(st.landedPos[0], st.landedPos[1], st.landedPos[2]);
+    freezeBody(st.mesh.quaternion, st.mesh.position);
+    if (lastRoll) lastRoll.heldFrames = st.heldFrames;
   }
 
   function finishRoll(st) {
@@ -1681,6 +1698,30 @@ export function createDiceStage(canvas, video) {
     };
   }
 
+  /**
+   * A die is at rest only if it is slow AND on the floor.
+   *
+   * The speed test alone is not enough, and the way it fails is spectacular.
+   * At the apex of an authored hop the vertical velocity passes through zero
+   * by definition, and `firstBounceHold.carry` has already capped the
+   * horizontal at 0.4 -- so the only thing keeping a die "awake" up there is
+   * its spin. A throw that happened to draw a small `launch.spin` (the draw
+   * is uniform per axis, so all three can land near zero) fell under both
+   * thresholds AT THE TOP OF THE ARC: the simulation stopped in mid-air, the
+   * second authored hop never fired, and the die was presented FLOATING four
+   * die-heights up. Measured at 2/40 rolls on d10 and 4/40 on d20 once
+   * `THROW.rest` was raised to end the tail (0.006 rad/s could never be
+   * reached mid-flight; 1.0 can).
+   *
+   * `dieHeight` is the circumsphere DIAMETER, so a resting die's centre is at
+   * most half of it above the floor. Requiring the centre inside a full
+   * die-height is generous to solver penetration and lift, and impossible for
+   * a die at the top of a four-die-height leap.
+   */
+  function atRest(lin, ang, y) {
+    return isSleepy(lin, ang) && y <= dieHeight;
+  }
+
   function readFrame() {
     const snap = snapshotBody();
     return { p: snap.p, q: snap.q, lin: [snap.v.x, snap.v.y, snap.v.z], ang: [snap.w.x, snap.w.y, snap.w.z] };
@@ -1730,7 +1771,7 @@ export function createDiceStage(canvas, video) {
       ms += PHYS_STEP * 1000;
       const lin = dieBody.velocity;
       const ang = dieBody.angularVelocity;
-      if (isSleepy([lin.x, lin.y, lin.z], [ang.x, ang.y, ang.z])) break;
+      if (atRest([lin.x, lin.y, lin.z], [ang.x, ang.y, ang.z], dieBody.position.y)) break;
     }
     mesh.position.copy(dieBody.position);
     mesh.quaternion.copy(dieBody.quaternion);
@@ -1886,7 +1927,8 @@ export function createDiceStage(canvas, video) {
             apexOpen = false;
           }
         }
-        if (isSleepy(frames[frames.length - 1].lin, frames[frames.length - 1].ang)) break;
+        const f = frames[frames.length - 1];
+        if (atRest(f.lin, f.ang, dieBody.position.y)) break;
       }
     } finally {
       dieBody.removeEventListener("collide", onCollide);
@@ -1933,7 +1975,7 @@ export function createDiceStage(canvas, video) {
         mesh.position.copy(dieBody.position);
         mesh.quaternion.copy(dieBody.quaternion);
         trackFlight(mesh);
-        if (isSleepy([dieBody.velocity.x, dieBody.velocity.y, dieBody.velocity.z], [dieBody.angularVelocity.x, dieBody.angularVelocity.y, dieBody.angularVelocity.z]) || now - st.t0 >= FLIGHT_MAX_MS) {
+        if (atRest([dieBody.velocity.x, dieBody.velocity.y, dieBody.velocity.z], [dieBody.angularVelocity.x, dieBody.angularVelocity.y, dieBody.angularVelocity.z], dieBody.position.y) || now - st.t0 >= FLIGHT_MAX_MS) {
           finishLanding(st, now);
         }
         updateBlob(mesh);
@@ -1973,7 +2015,15 @@ export function createDiceStage(canvas, video) {
       }
       st.lastPose = pose;
       updateBlob(mesh);
-      if (i >= last) beginCrane(st, now);
+      if (i >= last) beginBeat(st, now);
+      return;
+    }
+    if (st.phase === "beat") {
+      // Nothing moves. The die is frozen at its landing and the camera is
+      // still wherever the flight left it; the only thing happening is the
+      // clock.
+      updateBlob(mesh);
+      if (now - st.beatT0 >= REST_BEAT_MS) beginCrane(st, now);
       return;
     }
     if (st.phase === "crane") {
@@ -2020,6 +2070,7 @@ export function createDiceStage(canvas, video) {
       t0: performance.now(),
       snapT0: 0,
       craneT0: 0,
+      beatT0: 0,
       craneFrom: null,
       replay: null,
       replayI: 0,
@@ -2173,12 +2224,16 @@ export function createDiceStage(canvas, video) {
         apex2: lastRoll?.apex2 ?? null,
         apex2Heights: lastRoll?.apex2Heights ?? null,
         dieHeight: lastRoll?.dieHeight ?? null,
-        // How many authored rebounds fired. Always THROW.bounceHeights.length.
+        // How many authored rebounds fired, and how many were asked for. The
+        // two must match on every roll; the soak reads both rather than
+        // restating the profile's length as a literal.
         kicks: lastRoll?.kicks ?? null,
+        bounceHeights: THROW.bounceHeights.length,
         // Angular speed near rest. Evidence of spin, not a gate.
         tailSpin: lastRoll?.tailSpin ?? null,
         __hits: lastRoll?.__hits ?? null,
         heldFrames: lastRoll?.heldFrames ?? null,
+        restBeatMs: REST_BEAT_MS,
         craneMs: CRANE_MS,
         holdMs: HOLD_MS,
         fov: +camera.fov.toFixed(2),

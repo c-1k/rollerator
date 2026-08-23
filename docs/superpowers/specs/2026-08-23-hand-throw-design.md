@@ -157,6 +157,9 @@ export const THROW = {
 };
 ```
 
+Timing constants live beside the profile: `HOLD_MS` 800, `CRANE_MS` 400 and
+`REST_BEAT_MS` 300 (below).
+
 ### The authored hops
 
 `bounceHeights` is the authored spine of the throw: **one rebound target per
@@ -223,6 +226,38 @@ corner impulse), `firstBounceHold.carry`, and pulling `launch.z` in from
 friction (0.7 → 0.35 left landings unchanged and made the tail *longer*), and
 moving the spawn to the centre while travel was still large (the die simply
 travelled the same distance from a new origin).
+
+### The beat before the result
+
+Between the die coming to rest and anything being presented there is
+`REST_BEAT_MS` (300 ms), and during it nothing moves: the die is frozen where
+it landed, the camera is still where the flight left it, and no number or
+quote has appeared. Only then does the crane run and the result arrive. Cam,
+2026-08-23: *"it needs to settle just a bit more before being presented."*
+The phase is `"beat"` and it sits between `"flight"` and `"crane"`.
+
+The freeze happens when the beat starts rather than when the crane starts,
+because the last replay frame can still carry a sub-threshold drift and a beat
+spent creeping is not a beat spent at rest. The reduced-motion path is
+synchronous and never enters the phase machine, so it keeps its existing
+immediate behaviour.
+
+The beat is a deterministic constant added after the die is already down, so
+it moves every click-to-number figure by the same amount and buys nothing back
+from the throw. The ceiling moved with it, 2200 -> 2500.
+
+**A rest is on the floor, and that is checked.** `atRest` is `isSleepy` AND a
+height test, and the height half is not a tautology. Rest used to be a pure
+speed test; at the apex of an authored hop the vertical velocity passes
+through zero by definition and `firstBounceHold.carry` has already capped the
+horizontal, so the only thing keeping a die awake up there is its spin — and
+`launch.spin` is drawn uniformly per axis, so all three components can land
+near zero. Such a throw satisfied the speed test AT THE TOP OF THE ARC: the
+simulation stopped in mid-air, the second authored hop never fired, and the
+die was presented floating four die-heights up. Measured at 2/40 rolls on d10
+and 4/40 on d20, and reachable only once `rest.ang` was raised to end the tail
+(0.006 rad/s cannot be hit mid-flight; 1.0 can). The soak and the e2e both
+bound the resting height against the die's own height now.
 
 ### `rest` is the lever that ends a throw
 

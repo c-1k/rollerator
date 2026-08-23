@@ -93,7 +93,12 @@ const BOUNDS = {
   heldFrames: 0,
   wallMargin: 0.3,
   dieRadius: 0.82,
-  timeToNumberMs: 2200,
+  // Raised from 2200 on 2026-08-23 when Cam asked for a beat of stillness
+  // before the result is presented (`REST_BEAT_MS`). The beat is a
+  // deterministic 300 ms added after the die is already down, so it moves
+  // every click-to-number figure by the same amount and buys nothing back
+  // from the throw.
+  timeToNumberMs: 2500,
   // Where the die comes to REST, as a radius from centre. The radial landing
   // bound above is containment -- it only says the die stopped clear of the
   // ring. These two say the result reads as centred: Cam's 2026-08-23 note
@@ -102,6 +107,13 @@ const BOUNDS = {
   // wanted and is what makes the throw look physical; what is not wanted is
   // a die that habitually ends up against the wall, so the typical roll is
   // held near the middle and the tail is allowed to wander.
+  // A rest must be ON THE FLOOR. This looks tautological and is not: rest
+  // used to be a pure speed test, and at the apex of an authored hop the
+  // vertical velocity is zero and the horizontal is capped, so a low-spin
+  // throw could satisfy it in mid-air and be presented floating four
+  // die-heights up. Expressed as a multiple of the die's own height, which
+  // is the circumsphere diameter, so a resting centre is at most half of it.
+  restHeightPerDieHeight: 1.0,
   restRadiusMedian: 1.2,
   restRadiusP95: 2.0,
 };
@@ -182,6 +194,7 @@ function fastBatch(n) {
       tailSpin: d.tailSpin,
       dieHeight: d.dieHeight,
       kicks: d.kicks,
+      bounceHeights: d.bounceHeights,
       landedPos: d.landedPos,
     });
     window.__dice.abortRoll();
@@ -282,15 +295,16 @@ try {
           "0% against nothing rather than against a measured throw.",
       );
     }
-    // The kick is the one authored thing in the throw. If it did not fire,
-    // every apex number below is measuring plain restitution and the run is
+    // The kicks are the authored part of the throw. If they did not all fire,
+    // the apex numbers below are measuring plain restitution and the run is
     // certifying the wrong physics.
-    const unkicked = samples.filter((s) => s.kicks !== 2).length;
+    const want = samples[0]?.bounceHeights ?? 2;
+    const unkicked = samples.filter((s) => s.kicks !== want).length;
     if (unkicked) {
       throw new Error(
-        `${kind}: the authored first bounce did not fire on ${unkicked} of ` +
-          `${samples.length} rolls (debug().kicked). The apex numbers below ` +
-          "would be measuring restitution, not the kick.",
+        `${kind}: the authored bounces did not all fire on ${unkicked} of ` +
+          `${samples.length} rolls -- debug().kicks was not ${want}. The apex ` +
+          "numbers below would be measuring restitution, not the kick.",
       );
     }
 
@@ -337,6 +351,9 @@ try {
       Math.hypot(s.landedPos[0], s.landedPos[2]),
     );
     const maxR = Math.max(...radii);
+    const maxRestY = Math.max(...samples.map((s) => s.landedPos[1]));
+    const restYBound =
+      BOUNDS.restHeightPerDieHeight * (samples[0]?.dieHeight ?? 1.64);
     const tailSpins = samples.map((s) => s.tailSpin);
     const tailSpinMax = Math.max(...tailSpins);
     const medR = median(radii);
@@ -410,6 +427,11 @@ try {
       );
     if (!FAST && row.heldMax > BOUNDS.heldFrames)
       fail(`heldFrames max ${row.heldMax} -- the replay stuttered`);
+    if (maxRestY > restYBound)
+      fail(
+        `a die came to rest ${round(maxRestY)} up, past ${round(restYBound)} ` +
+          `-- that is not a rest on the floor`,
+      );
     if (maxR > clearR)
       fail(`landed ${round(maxR - clearR)} past the radial landing bound`);
     if (medR > BOUNDS.restRadiusMedian)

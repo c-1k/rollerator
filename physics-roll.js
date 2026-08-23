@@ -322,6 +322,21 @@ export const FLIGHT_MAX_MS = THROW.flightMaxMs;
 export const GRAVITY_Y = THROW.gravityY;
 export const HOLD_MS = 800;
 export const CRANE_MS = 400;
+/**
+ * The beat between the die coming to rest and the result being presented.
+ *
+ * The throw used to cut straight from the last frame of the replay into the
+ * crane, so the camera started moving on the same frame the die stopped and
+ * the number arrived with it. Cam, 2026-08-23: "it needs to settle just a bit
+ * more before being presented." For this long the die simply sits where it
+ * landed, under the flight camera, going nowhere -- and only then does the
+ * camera move and the quote appear.
+ *
+ * It is a deterministic additive constant on the click-to-number time, which
+ * is why the ceiling moved 2200 -> 2500 with it rather than the throw being
+ * re-tuned to pay for it.
+ */
+export const REST_BEAT_MS = 300;
 
 function len(v) {
   return Math.hypot(v[0], v[1], v[2]);

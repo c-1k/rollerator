@@ -140,9 +140,10 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
       // 2200, not the soak's p95 of 2000: this is ONE roll, and a single
       // draw is allowed past a 95th percentile by definition. What a single
       // roll may never breach is the product ceiling — the number on screen
-      // within 2.2 s of the click — and since #hort appears at beginCrane,
-      // the flight is very nearly all of that. So the single-roll bound is
-      // the ceiling itself; the soak's tighter band holds the distribution.
+      // within 2.5 s of the click. #hort appears at beginCrane, which now
+      // waits out REST_BEAT_MS (300 ms) after the die is down, so the flight
+      // gets the ceiling minus the beat: 2500 − 300 = 2200. The soak's
+      // tighter band holds the distribution.
       expect(d.flightMs, `${kind} flight ${d.flightMs} ms`).toBeLessThanOrEqual(
         2200,
       );
@@ -188,6 +189,15 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
         d.apex2Heights,
         `${kind} second bounce ${d.apex2Heights} did not come in under the first ${d.apexHeights}`,
       ).toBeLessThan(d.apexHeights);
+      // A rest is on the FLOOR. Rest used to be a pure speed test, and at the
+      // apex of an authored hop the vertical velocity is zero while the
+      // horizontal is capped — so a low-spin throw could satisfy it in mid-air
+      // and be presented floating four die-heights up. `dieHeight` is the
+      // circumsphere diameter, so a resting centre is at most half of it.
+      expect(
+        d.landedPos[1],
+        `${kind} came to rest ${d.landedPos[1]} up, off the floor (die ${d.dieHeight} u)`,
+      ).toBeLessThanOrEqual(d.dieHeight);
       expect(
         d.heldFrames,
         `${kind} held ${d.heldFrames} frames — the replay stuttered`,
