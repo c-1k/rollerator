@@ -123,6 +123,13 @@ Stated plainly so nobody mistakes them for coverage:
 - **`app.js`, `dice3d.js`, `index.html` and `physics-roll*.js` are excluded
   from lint** while the physics port rewrites them. `biome.jsonc` says so at
   the exclusion, and closing it is a one-line delete plus `pnpm format`.
+- **`quotes.js`, `share-card.js`, `styles.css` and `vercel.json` are linted but
+  not formatted.** Adopting Biome would otherwise have rewritten 600+ lines of
+  shipping code as a side effect of adding CI. This repo deploys the repo root
+  with no build step, so a reformat is a full-content deploy of every byte the
+  CDN serves — that deserves its own commit and its own look at the rendered
+  site, not a drive-by. The linter stays on for them; only the formatter is
+  off. See the `overrides` block in `biome.jsonc`.
 - **Pixel snapshots are skipped in CI.** Baselines are macOS-generated and CI
   renders on Linux. `e2e/chrome.spec.js` holds the structural line there;
   `e2e/snapshot.spec.js` explains how to enable both platforms.

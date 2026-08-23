@@ -16,9 +16,9 @@
       //
       // app.js and dice3d.js are being rewritten in place right now by
       // the physics port (.grok/workflows/port-dice-physics.rhai).
-      // Formatting them here would collide head-on with that work, so
-      // they are held out of the gate for exactly as long as that port
-      // is in flight.
+      // Touching them here would collide head-on with that work, so they
+      // are held out of the gate for exactly as long as that port is in
+      // flight.
       //
       // TO CLOSE: once the physics port has landed on main, delete the
       // four lines below and run `pnpm format`. That is the whole fix.
@@ -49,5 +49,22 @@
       }
     }
   },
-  "javascript": { "formatter": { "quoteStyle": "double" } }
+  "javascript": { "formatter": { "quoteStyle": "double" } },
+  "overrides": [
+    {
+      // Files the live site actually serves.
+      //
+      // The linter stays ON for these -- it is what catches real defects.
+      // Only the FORMATTER is off, so that adopting Biome does not rewrite
+      // 600+ lines of shipping code as a side effect of adding CI. A
+      // reformat changes every byte the CDN serves, and this repo deploys
+      // straight from the repo root with no build step in between, so
+      // "just formatting" is still a full-content deploy.
+      //
+      // TO CLOSE: reformat them as their own deliberate commit, verify the
+      // rendered site is unchanged, then delete this override.
+      "includes": ["quotes.js", "share-card.js", "styles.css", "vercel.json"],
+      "formatter": { "enabled": false }
+    }
+  ]
 }
