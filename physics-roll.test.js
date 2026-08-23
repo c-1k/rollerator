@@ -20,7 +20,6 @@ import {
   revealCamera,
   rotateAround,
   rotateByQuat,
-  slowMoScale,
   snapProgress,
   smoothProgress,
   snapQuaternion,
@@ -113,17 +112,6 @@ describe("throwPose", () => {
     assert.ok(pose.velocity[2] < 0, `vz should be toward -Z, got ${pose.velocity[2]}`);
     assert.equal(pose.angularVelocity.length, 3);
     assert.ok(pose.angularVelocity.some((v) => Math.abs(v) > 1));
-  });
-});
-
-describe("slowMoScale", () => {
-  it("stays full-speed for the drop, then eases as energy dies", () => {
-    almost(slowMoScale(8, 12, 200), 1);
-    const lateFast = slowMoScale(6, 10, 2000);
-    const lateSlow = slowMoScale(0.2, 0.3, 2000);
-    assert.ok(lateFast > 0.7, `still-energetic late scale ${lateFast}`);
-    assert.ok(lateSlow < 0.4, `resting scale ${lateSlow}`);
-    assert.ok(lateSlow < lateFast);
   });
 });
 

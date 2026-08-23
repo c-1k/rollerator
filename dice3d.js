@@ -8,18 +8,20 @@ import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import * as CANNON from "cannon-es";
 import { createRollController } from "./roll-engine.js?v=reveal-cam1";
 import {
+  CRANE_MS,
   FACE_UV_YAW,
   FLIGHT_MAX_MS,
   GRAVITY_Y,
   HOLD_MS,
+  THROW,
   faceValueTable,
+  interpolateFrame,
   isSleepy,
   landedValue,
   restOffsetY,
   revealCamera,
   rotateAround,
   rotateByQuat,
-  slowMoScale,
   smoothProgress,
   snapQuaternion,
   throwPose,
@@ -1004,8 +1006,8 @@ export function createDiceStage(canvas, video) {
   const tableMat = new CANNON.Material("table");
   world.addContactMaterial(
     new CANNON.ContactMaterial(diceMat, tableMat, {
-      friction: 0.4,
-      restitution: 0.42,
+      friction: THROW.contact.friction,
+      restitution: THROW.contact.restitution,
       contactEquationStiffness: 4e6,
       contactEquationRelaxation: 3,
     })
@@ -1017,12 +1019,15 @@ export function createDiceStage(canvas, video) {
     body.quaternion.setFromVectors(new CANNON.Vec3(0, 0, 1), new CANNON.Vec3(normal[0], normal[1], normal[2]));
     body.position.set(x, y, z);
     world.addBody(body);
+    return body;
   }
-  addPlane([0, 1, 0], 0, 0, 0);
-  addPlane([-1, 0, 0], 1.72, 0, 0);
-  addPlane([1, 0, 0], -1.72, 0, 0);
-  addPlane([0, 0, -1], 0, 0, 1.62);
-  addPlane([0, 0, 1], 0, 0, -1.62);
+  const floorBody = addPlane([0, 1, 0], 0, 0, 0);
+  const wallBodies = [
+    addPlane([-1, 0, 0], 1.72, 0, 0),
+    addPlane([1, 0, 0], -1.72, 0, 0),
+    addPlane([0, 0, -1], 0, 0, 1.62),
+    addPlane([0, 0, 1], 0, 0, -1.62),
+  ];
   addPlane([0, -1, 0], 0, 9.4, 0);
 
   const catcher = new THREE.Mesh(
@@ -1107,7 +1112,7 @@ export function createDiceStage(canvas, video) {
   let lastRoll = null;
   let camTween = 0;
   let lastTick = performance.now();
-  const PHYS_STEP = 1 / 60;
+  const PHYS_STEP = THROW.physStep;
   const rolls = createRollController();
   let camFrom = idleCam.clone();
   let camTo = idleCam.clone();
@@ -1240,10 +1245,10 @@ export function createDiceStage(canvas, video) {
       mass: 0.34,
       material: diceMat,
       allowSleep: true,
-      sleepSpeedLimit: 0.22,
-      sleepTimeLimit: 0.55,
-      linearDamping: 0.012,
-      angularDamping: 0.035,
+      sleepSpeedLimit: THROW.sleep.speedLimit,
+      sleepTimeLimit: THROW.sleep.timeLimit,
+      linearDamping: THROW.damping.linear,
+      angularDamping: THROW.damping.angular,
     });
     dieBody.addShape(shape);
     dieBody.ccdSpeedThreshold = 1.2;
@@ -1448,6 +1453,10 @@ export function createDiceStage(canvas, video) {
       value: st.value,
       landedQuat: st.landedQuat.slice(),
       reveal: st.reveal,
+      flightMs: st.metrics?.flightMs ?? null,
+      bounces: st.metrics?.bounces ?? null,
+      wallHits: st.metrics?.wallHits ?? null,
+      heldFrames: 0,
     };
     if (!st.fromP) st.fromP = new THREE.Vector3();
     if (!st.flatP) st.flatP = new THREE.Vector3();
@@ -1562,6 +1571,7 @@ export function createDiceStage(canvas, video) {
     st.heated = true;
     heatFace(st.mesh, st.index);
     st.report?.(st.value);
+    if (lastRoll) lastRoll.heldFrames = st.heldFrames;
   }
 
   function snapshotBody() {
@@ -1627,15 +1637,33 @@ export function createDiceStage(canvas, video) {
     mesh.quaternion.copy(dieBody.quaternion);
   }
 
+  /**
+   * Run the throw to rest without rendering, recording every physics step.
+   * Also counts floor bounces and wall hits via the die's collide events;
+   * the listener is attached only for the duration of the sim.
+   */
   function simulateTrajectory() {
     const frames = [readFrame()];
+    const metrics = { flightMs: 0, bounces: 0, wallHits: 0 };
+    const onCollide = (e) => {
+      const speed = Math.abs(e.contact.getImpactVelocityAlongNormal());
+      if (e.body === floorBody && speed > 0.8) metrics.bounces += 1;
+      else if (wallBodies.includes(e.body) && speed > 0.8) metrics.wallHits += 1;
+    };
+    dieBody.addEventListener("collide", onCollide);
     let ms = 0;
-    while (ms < FLIGHT_MAX_MS) {
-      world.step(PHYS_STEP);
-      ms += PHYS_STEP * 1000;
-      frames.push(readFrame());
-      if (isSleepy(frames[frames.length - 1].lin, frames[frames.length - 1].ang)) break;
+    try {
+      while (ms < FLIGHT_MAX_MS) {
+        world.step(PHYS_STEP);
+        ms += PHYS_STEP * 1000;
+        frames.push(readFrame());
+        if (isSleepy(frames[frames.length - 1].lin, frames[frames.length - 1].ang)) break;
+      }
+    } finally {
+      dieBody.removeEventListener("collide", onCollide);
     }
+    metrics.flightMs = Math.round(ms);
+    frames.metrics = metrics;
     return frames;
   }
 
@@ -1661,12 +1689,28 @@ export function createDiceStage(canvas, video) {
       }
       const frames = st.replay;
       const last = frames.length - 1;
-      const frame = frames[Math.min(st.replayI, last)];
-      const scale = slowMoScale(Math.hypot(...frame.lin), Math.hypot(...frame.ang), now - st.t0);
-      st.replayT += dt * scale;
-      st.replayI = Math.min(last, Math.floor(st.replayT / PHYS_STEP));
-      const i = st.replayI;
-      applyFrame(mesh, frames[i]);
+      // Real time, always. The old energy-ramped slow-mo displayed recorded
+      // frames at 22% speed with a floor-index lookup — ~13 fps and every
+      // near-rest jitter held five times longer. Interpolate instead.
+      st.replayT += dt;
+      const exact = st.replayT / PHYS_STEP;
+      const i = Math.min(last, Math.floor(exact));
+      st.replayI = i;
+      const next = frames[Math.min(last, i + 1)];
+      const pose = interpolateFrame(frames[i], next, exact - i);
+      mesh.position.set(pose.p[0], pose.p[1], pose.p[2]);
+      mesh.quaternion.set(pose.q[0], pose.q[1], pose.q[2], pose.q[3]);
+      dieBody.position.set(pose.p[0], pose.p[1], pose.p[2]);
+      dieBody.quaternion.set(pose.q[0], pose.q[1], pose.q[2], pose.q[3]);
+      // "Vibration" detector: a render tick where the clock advanced but the
+      // displayed pose did not change while frames remain.
+      if (i < last && st.lastPose) {
+        const same =
+          st.lastPose.p.every((v, k) => v === pose.p[k]) &&
+          st.lastPose.q.every((v, k) => v === pose.q[k]);
+        if (same) st.heldFrames += 1;
+      }
+      st.lastPose = pose;
       const span = Math.max(1, last - st.tailStart);
       const u = i <= st.tailStart ? 0 : smoothProgress(i - st.tailStart, span);
       if (u <= 0) {
@@ -1735,6 +1779,9 @@ export function createDiceStage(canvas, video) {
       replay: null,
       replayI: 0,
       replayT: 0,
+      metrics: null,
+      heldFrames: 0,
+      lastPose: null,
       tailStart: 0,
       heated: false,
       live: () => session.isLive() && die === mesh,
@@ -1789,6 +1836,7 @@ export function createDiceStage(canvas, video) {
       applyForcedFace(mesh, force);
       camTween += 1;
       const st = emptyRollState(mesh, session, finish, force, report);
+      st.metrics = replay.metrics;
       captureLanded(st);
       restoreBody(origin);
       mesh.position.copy(dieBody.position);
@@ -1864,6 +1912,12 @@ export function createDiceStage(canvas, video) {
         meshQuat: die ? meshQuat(die) : null,
         normals: die ? meshNormals(die) : null,
         reveal: lastRoll?.reveal ?? null,
+        flightMs: lastRoll?.flightMs ?? null,
+        bounces: lastRoll?.bounces ?? null,
+        wallHits: lastRoll?.wallHits ?? null,
+        heldFrames: lastRoll?.heldFrames ?? null,
+        craneMs: CRANE_MS,
+        holdMs: HOLD_MS,
         fov: +camera.fov.toFixed(2),
         camY: +camera.position.y.toFixed(3),
         cam: [+camera.position.x.toFixed(2), +camera.position.y.toFixed(2), +camera.position.z.toFixed(2)],

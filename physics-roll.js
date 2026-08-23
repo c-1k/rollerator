@@ -226,16 +226,6 @@ export function throwPose(rng = Math.random) {
   };
 }
 
-const SLOWMO_AFTER_MS = 720;
-const SLOWMO_MIN = 0.22;
-
-export function slowMoScale(linSpeed, angSpeed, flightMs, afterMs = SLOWMO_AFTER_MS) {
-  if (flightMs < afterMs) return 1;
-  const energy = linSpeed + angSpeed * 0.2;
-  const u = Math.min(1, Math.max(0, (energy - 0.35) / 3.4));
-  return SLOWMO_MIN + (1 - SLOWMO_MIN) * u * u;
-}
-
 export function landedValue(normals, quat, values, worldUp = [0, 1, 0]) {
   const i = upwardFaceIndex(normals, quat, worldUp);
   return values[i];
