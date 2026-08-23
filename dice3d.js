@@ -19,7 +19,9 @@ import {
   isSleepy,
   landedValue,
   restOffsetY,
+  revealCamera,
   rotateAround,
+  rotateByQuat,
   slowMoScale,
   smoothProgress,
   throwPose,
@@ -977,6 +979,9 @@ export function createDiceStage(canvas, video) {
   const IDLE_FOV = 44;
   const DROP_FOV = 54;
   const PRESENT_FOV = 44;
+  // Reveal tilt off the vertical. Kept at 0 until Task 4 so the picture is
+  // unchanged while the mechanism underneath it is replaced.
+  const REVEAL_TILT = 0;
   const TAIL_MS = 1600;
   const camera = new THREE.PerspectiveCamera(IDLE_FOV, 1, 0.1, 80);
   const idleCam = new THREE.Vector3(0, 8.2, 0);
@@ -1102,6 +1107,7 @@ export function createDiceStage(canvas, video) {
   let heatedIndex = -1;
   let settleRoll = null;
   let rollState = null;
+  let lastRoll = null;
   let camTween = 0;
   let lastTick = performance.now();
   const PHYS_STEP = 1 / 60;
@@ -1147,6 +1153,22 @@ export function createDiceStage(canvas, video) {
       camera.updateProjectionMatrix();
       lookDown(idleCam);
     }
+  }
+
+  /** Camera distance for the reveal; today's settle height, by aspect. */
+  function revealDistance() {
+    return camera.aspect < 0.86 ? 9.2 : 8.2;
+  }
+
+  /** The camera pose that presents face `index` of a die resting at `landedQuat`. */
+  function computeReveal(mesh, index, landedQuat) {
+    const t = mesh.userData.faceUps[index];
+    const texUpWorld = rotateByQuat([t.x, t.y, t.z], landedQuat);
+    return revealCamera(texUpWorld, {
+      tilt: REVEAL_TILT,
+      distance: revealDistance(),
+      aim: [SETTLE_AIM.x, SETTLE_AIM.y, SETTLE_AIM.z],
+    });
   }
 
   function resize() {
@@ -1414,6 +1436,14 @@ export function createDiceStage(canvas, video) {
     st.index = landedIndex(mesh);
     st.value = landedValue(meshNormals(mesh), meshQuat(mesh), mesh.userData.values, [0, 1, 0]);
     st.label = formatFace(kind, st.value);
+    st.landedQuat = meshQuat(mesh);
+    st.reveal = computeReveal(mesh, st.index, st.landedQuat);
+    lastRoll = {
+      index: st.index,
+      value: st.value,
+      landedQuat: st.landedQuat.slice(),
+      reveal: st.reveal,
+    };
     if (!st.fromQ) st.fromQ = new THREE.Quaternion();
     if (!st.fromP) st.fromP = new THREE.Vector3();
     if (!st.holdQ) st.holdQ = new THREE.Quaternion();
@@ -1674,6 +1704,8 @@ export function createDiceStage(canvas, video) {
       index: -1,
       value: null,
       label: "",
+      landedQuat: null,
+      reveal: null,
       t0: performance.now(),
       snapT0: 0,
       fromQ: new THREE.Quaternion(),
@@ -1695,6 +1727,7 @@ export function createDiceStage(canvas, video) {
 
   function roll(opts = {}) {
     abortRoll();
+    lastRoll = null;
     if (!die || !dieBody) return Promise.resolve(null);
     coolFaces(die);
     restoreSwappedFaces(die);
@@ -1807,7 +1840,12 @@ export function createDiceStage(canvas, video) {
       return {
         phase: rollState?.phase || (rolling ? "rolling" : "idle"),
         y: die ? +die.position.y.toFixed(3) : null,
-        value: rollState?.value ?? null,
+        value: lastRoll?.value ?? null,
+        landedIndex: lastRoll?.index ?? -1,
+        landedQuat: lastRoll?.landedQuat ?? null,
+        meshQuat: die ? meshQuat(die) : null,
+        normals: die ? meshNormals(die) : null,
+        reveal: lastRoll?.reveal ?? null,
         fov: +camera.fov.toFixed(2),
         camY: +camera.position.y.toFixed(3),
         cam: [+camera.position.x.toFixed(2), +camera.position.y.toFixed(2), +camera.position.z.toFixed(2)],
