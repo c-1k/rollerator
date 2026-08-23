@@ -775,26 +775,41 @@ git commit -m "feat(dice): 15-degree reveal tilt"
 - Modify: `index.html` (the `?v=` token), `app.js` (its import tokens)
 - Modify: `CLAUDE.md` (the "In flight" note; Known gaps bullet 3), `INDEX.md` (`physics-roll.js` row)
 
-- [ ] **Step 1: Mutation control — prove the assertion still has teeth**
+- [ ] **Step 1: Two mutation controls — prove the assertion has teeth in BOTH windows**
 
-In `lockSettleFrame`, temporarily add one line after `mesh.position.set(0, settleY, 0);`:
+Task 3's review found that a post-rest write can happen in two places the probe must see: the replay **tail** (where the old slerp lived) and the **hold/finish** path. `finishRoll` now calls `sitOnTable()` with no quaternion argument precisely so a tail write survives to the probe. Prove both windows, one at a time.
+
+Control A — the tail. In `stepRoll`'s tail branch, immediately after `mesh.position.lerpVectors(st.fromP, st.toP, u);`, temporarily add:
 
 ```js
-    mesh.rotateY(0.3); // MUTATION CONTROL — must not be committed
+        mesh.rotateY(0.3); // MUTATION CONTROL A (tail) — must not be committed
 ```
 
 ```bash
-pnpm exec playwright test e2e/roll.spec.js > /tmp/task5-mutation.log 2>&1; echo "exit: $?"
-grep -E "re-oriented after rest" /tmp/task5-mutation.log | head -3
+pnpm exec playwright test e2e/roll.spec.js > /tmp/task5-mutation-tail.log 2>&1; echo "exit: $?"
+grep -E "re-oriented after rest" /tmp/task5-mutation-tail.log | head -2
 ```
 
-Expected: `exit: 1` and the invariant-3 message with a `|q·q0|` clearly below 1 (a 0.3 rad yaw gives ≈ 0.989). Then remove the line:
+Expected: `exit: 1` and the invariant-3 message with `|q·q0|` ≈ 0.989. Remove the line.
+
+Control B — the hold. In `lockSettleFrame`, immediately after `mesh.position.set(0, settleY, 0);`, temporarily add:
+
+```js
+    mesh.rotateY(0.3); // MUTATION CONTROL B (hold) — must not be committed
+```
+
+```bash
+pnpm exec playwright test e2e/roll.spec.js > /tmp/task5-mutation-hold.log 2>&1; echo "exit: $?"
+grep -E "re-oriented after rest" /tmp/task5-mutation-hold.log | head -2
+```
+
+Expected: `exit: 1`, same message. Remove the line. Then:
 
 ```bash
 grep -c "MUTATION CONTROL" dice3d.js
 ```
 
-Expected: `0`. Keep `/tmp/task5-mutation.log`.
+Expected: `0`. Keep both logs; the PR quotes both.
 
 - [ ] **Step 2: Bump the cache-bust token in lockstep**
 
@@ -838,11 +853,44 @@ In `CLAUDE.md` "Known gaps", delete the bullet beginning `- **No test asserts th
 
 In `INDEX.md`, the `physics-roll.js` row: append ", and `revealCamera()` — where the camera goes to present a landed face" to its description.
 
+In the spec `docs/superpowers/specs/2026-08-22-reveal-camera-design.md`, append a final section so the document matches what was built:
+
+```markdown
+## 11. Amendments made during implementation (2026-08-22)
+
+Rulings recorded in the implementation ledger; the spec above is left as
+approved and corrected here.
+
+- **§4.2 distance.** `REVEAL_DISTANCE` is the eye-to-aim distance that
+  `revealCamera` consumes: `settleCam.y − SETTLE_AIM.y` = **7.8** landscape /
+  **8.8** portrait — not `settleCam.y` itself. `revealDistance()` returns these.
+- **§5 idle placement.** `restQuaternionForFace` had a third caller the spec
+  missed: `sitDefaultFace()`, the idle pose on load and on die/environment
+  switch. That placement precedes any roll and is not governed by invariant 3;
+  it now uses the existing pure `snapQuaternion(normal, texUp)` with the idle
+  view-up `(0,0,−1)`, and never reads `camera.up` (which varies with the
+  reveal after this change).
+- **§5 finish.** `sitOnTable()` is called with **no** quaternion argument in
+  `finishRoll` and the reduced-motion path. Writing the correct quaternion is
+  still a post-rest write, and it masked tail writes from the invariant-3
+  probe, which reads state after finish.
+- **§5 resize.** A resize after the roll has finished re-derives the reveal
+  for the new aspect and re-places the camera (`applyFraming`, guarded by
+  `lastRoll?.reveal`). `lastRoll` is cleared in `abortRoll()`, which every
+  roll and every die/environment switch goes through.
+- **§7 controls.** Two mutation controls, not one: a tail write and a hold
+  write must each fail the invariant-3 assertion.
+- **§7 d100.** `e2e/roll.spec.js` modelled d100 as 1–100 from the pre-port
+  `DICE` table; the port ships a 10-face percentile *tens* die (00–90). The
+  test's model was corrected (per-die `legal()` predicate). Whether `00`
+  should read as 100 is a product question left to sub-spec 2.
+```
+
 - [ ] **Step 4: Full gate, then push and open the PR**
 
 ```bash
 pnpm run verify > /tmp/task5-verify.log 2>&1; echo "exit: $?"
-git add index.html app.js dice3d.js CLAUDE.md INDEX.md
+git add index.html app.js dice3d.js CLAUDE.md INDEX.md docs/superpowers/specs/2026-08-22-reveal-camera-design.md
 git commit -m "chore: cache-bust reveal-cam1; docs for the reveal camera"
 git push -u origin feat/reveal-camera
 ```
@@ -858,7 +906,9 @@ gh pr create --base feat/physics-port --head feat/reveal-camera --title "feat(di
 The body must include, verbatim from the logs:
 - the Task 2 red line (`/tmp/task2-red.log`) — the assertion failing on the defect;
 - the Task 3 green summary (`/tmp/task3-green.log`);
-- the Task 5 mutation-control line (`/tmp/task5-mutation.log`) with its `|q·q0|` value;
+- both Task 5 mutation-control lines (`/tmp/task5-mutation-tail.log` and `/tmp/task5-mutation-hold.log`) with their `|q·q0|` values;
+- one sentence on the d100 test-model correction (it was a 1-in-10 flake on the base) and the open product question: does `00` read as 100?
+- one sentence noting `st.reveal` / `lastRoll.reveal` is consumed by the tail tween, hold, finish, and post-roll resize;
 - the seven `pnpm shot` images attached or linked, with one sentence each on what you saw;
 - the sentence "`grep -c restQuaternionForFace dice3d.js` → 0".
 
