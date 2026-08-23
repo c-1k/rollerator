@@ -11,9 +11,11 @@ import {
   assignPolyhedronValues,
   faceValueTable,
   icosahedronFaceNormals,
+  interpolateFrame,
   isSleepy,
   landedValue,
   pairOppositeFaces,
+  quatSlerp,
   restOffsetY,
   revealCamera,
   rotateAround,
@@ -446,5 +448,52 @@ describe("THROW profile", () => {
     assert.equal(ANG_SLEEP, THROW.rest.ang);
     assert.ok(THROW.gravityY <= -120, "heavy: at least ~2.5x the old -48");
     assert.ok(THROW.physStep <= 1 / 100, "fine steps for fast contacts");
+  });
+});
+
+describe("quatSlerp", () => {
+  const qn = (q) => {
+    const l = Math.hypot(...q);
+    return q.map((x) => x / l);
+  };
+  const a = [0, 0, 0, 1];
+  const b = qn([0, Math.sin(Math.PI / 4), 0, Math.cos(Math.PI / 4)]); // 90° about Y
+
+  it("hits both endpoints", () => {
+    assert.deepEqual(quatSlerp(a, b, 0), a);
+    for (let k = 0; k < 4; k++) almost(quatSlerp(a, b, 1)[k], b[k], 1e-9);
+  });
+
+  it("midpoint is unit length and halfway (45° about Y)", () => {
+    const m = quatSlerp(a, b, 0.5);
+    almost(Math.hypot(...m), 1, 1e-9);
+    almost(m[1], Math.sin(Math.PI / 8), 1e-6);
+    almost(m[3], Math.cos(Math.PI / 8), 1e-6);
+  });
+
+  it("takes the shortest arc when b is given as -b", () => {
+    const negB = b.map((x) => -x);
+    const m1 = quatSlerp(a, b, 0.5);
+    const m2 = quatSlerp(a, negB, 0.5);
+    // same rotation: dot is ±1
+    almost(Math.abs(m1[0] * m2[0] + m1[1] * m2[1] + m1[2] * m2[2] + m1[3] * m2[3]), 1, 1e-9);
+  });
+});
+
+describe("interpolateFrame", () => {
+  const f0 = { p: { x: 0, y: 1, z: 2 }, q: { x: 0, y: 0, z: 0, w: 1 }, lin: [0, 0, 0], ang: [0, 0, 0] };
+  const f1 = { p: { x: 2, y: 3, z: 4 }, q: { x: 0, y: 1, z: 0, w: 0 }, lin: [0, 0, 0], ang: [0, 0, 0] };
+
+  it("returns the endpoints at t=0 and t=1", () => {
+    assert.deepEqual(interpolateFrame(f0, f1, 0).p, [0, 1, 2]);
+    assert.deepEqual(interpolateFrame(f0, f1, 1).p, [2, 3, 4]);
+  });
+
+  it("position at the midpoint is the mean", () => {
+    assert.deepEqual(interpolateFrame(f0, f1, 0.5).p, [1, 2, 3]);
+  });
+
+  it("quaternion at the midpoint is unit length", () => {
+    almost(Math.hypot(...interpolateFrame(f0, f1, 0.5).q), 1, 1e-9);
   });
 });

@@ -107,6 +107,55 @@ export function rotateByQuat(v, q) {
   ];
 }
 
+/** Spherical interpolation between unit quaternions along the shortest arc. */
+export function quatSlerp(a, b, t) {
+  let bx = b[0];
+  let by = b[1];
+  let bz = b[2];
+  let bw = b[3];
+  let cosom = a[0] * bx + a[1] * by + a[2] * bz + a[3] * bw;
+  if (cosom < 0) {
+    cosom = -cosom;
+    bx = -bx;
+    by = -by;
+    bz = -bz;
+    bw = -bw;
+  }
+  let s0;
+  let s1;
+  if (1 - cosom > 1e-6) {
+    const omega = Math.acos(cosom);
+    const sinom = Math.sin(omega);
+    s0 = Math.sin((1 - t) * omega) / sinom;
+    s1 = Math.sin(t * omega) / sinom;
+  } else {
+    s0 = 1 - t;
+    s1 = t;
+  }
+  return quatNormalize([
+    s0 * a[0] + s1 * bx,
+    s0 * a[1] + s1 * by,
+    s0 * a[2] + s1 * bz,
+    s0 * a[3] + s1 * bw,
+  ]);
+}
+
+/**
+ * Pose between two recorded physics frames. Frames are the replay's shape
+ * ({ p:{x,y,z}, q:{x,y,z,w} }); the result is arrays. t is clamped.
+ */
+export function interpolateFrame(a, b, t) {
+  const u = Math.min(1, Math.max(0, t));
+  return {
+    p: [
+      a.p.x + (b.p.x - a.p.x) * u,
+      a.p.y + (b.p.y - a.p.y) * u,
+      a.p.z + (b.p.z - a.p.z) * u,
+    ],
+    q: quatSlerp([a.q.x, a.q.y, a.q.z, a.q.w], [b.q.x, b.q.y, b.q.z, b.q.w], u),
+  };
+}
+
 export function upwardFaceIndex(normals, quat, worldUp = [0, 1, 0]) {
   let best = 0;
   let bestDot = -Infinity;
