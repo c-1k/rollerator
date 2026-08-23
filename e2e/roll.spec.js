@@ -40,6 +40,11 @@ const rendered = (kind, n) =>
       ? "0"
       : String(n);
 const HORT_ROLL = /^(d\d+)\s+·\s+(\d+)$/;
+// The die's circumradius: DIE_SCALE (0.72) times the largest geometry
+// circumradius (1.22 for the d6's box). NOT 0.72 -- that is the scale factor.
+const DIE_RADIUS = 0.82;
+// How much daylight a landing must leave beyond the die itself.
+const WALL_MARGIN = 0.3;
 
 test("every die rolls to a legal face and reports it", async ({ page }) => {
   // Seven rolls at ~10s each on top of a ~25s cold start; the default
@@ -127,24 +132,28 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
         `${kind} flight ${d.flightMs} ms`,
       ).toBeGreaterThanOrEqual(400);
       expect(d.flightMs, `${kind} flight ${d.flightMs} ms`).toBeLessThanOrEqual(
-        2000,
+        1800,
       );
       expect(d.bounces, `${kind} bounces ${d.bounces}`).toBeGreaterThanOrEqual(
         1,
       );
-      expect(d.bounces, `${kind} bounces ${d.bounces}`).toBeLessThanOrEqual(4);
+      expect(d.bounces, `${kind} bounces ${d.bounces}`).toBeLessThanOrEqual(5);
       expect(
         d.heldFrames,
         `${kind} held ${d.heldFrames} frames — the replay stuttered`,
       ).toBe(0);
+      // Read the tray off the stage rather than restating it: the walls are
+      // built from THROW.tray, so a literal here would silently stop meaning
+      // "clear of the wall" the moment the tray is tuned. Clearance is the
+      // die's own radius plus a margin.
       expect(
         Math.abs(d.landedPos[0]),
         `${kind} landed in the x wall`,
-      ).toBeLessThanOrEqual(1.72 - 0.3);
+      ).toBeLessThanOrEqual(d.tray.x - (DIE_RADIUS + WALL_MARGIN));
       expect(
         Math.abs(d.landedPos[2]),
         `${kind} landed in the z wall`,
-      ).toBeLessThanOrEqual(1.62 - 0.3);
+      ).toBeLessThanOrEqual(d.tray.z - (DIE_RADIUS + WALL_MARGIN));
       // The die is presented WHERE it landed — no slide. Compares the live mesh
       // position to the recorded landing, so a re-introduced slide fails here.
       for (let k = 0; k < 3; k++) {

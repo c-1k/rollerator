@@ -3,29 +3,37 @@
  * unit-tested and tuned in one place. Units are world units, seconds,
  * radians. Scale matters here and is easy to get wrong: DIE_SCALE = 0.72 is
  * a SCALE FACTOR on geometry of circumradius 1.12-1.22, so the die's
- * circumradius is ~0.72-0.83 and it is ~1.6 units ACROSS -- roughly half the
- * width of the 3.44 x 3.24 tray. That ratio is why `launch.z` has to stay
- * under ~0.78 (above it the die spawns inside the far wall at z = 1.62 and
- * the solver ejects it) and why the die cannot travel far before it lands.
+ * circumradius is ~0.82 and it is ~1.6 units ACROSS.
+ *
+ * `tray` is the half-extent of the four invisible walls, which are physics
+ * bounds and not scenery -- the backdrop is a 2D film and the camera frames
+ * the die wherever it lands, so the tray's size is a throw tunable like any
+ * other. It is the number the rest of the profile is derived from: every
+ * launch draw must keep the WHOLE die inside it (|x| and z below
+ * tray - 0.82), or the die spawns interpenetrating a wall and the solver
+ * ejects it. That defect is what the 3.44 x 3.24 tray and z up to 1.4 used to
+ * produce on most rolls.
+ *
  * Values are the tuned result of the soak in the plan's Task 5.
  */
 export const THROW = {
   gravityY: -120,
   physStep: 1 / 120,
   flightMaxMs: 2500,
+  tray: { x: 3.0, z: 2.8 },
   launch: {
-    x: [-0.5, 0.5],
-    y: [2.4, 2.9],
-    z: [0.55, 0.78],
-    vx: [-0.4, 0.4],
-    vy: [-1.0, -0.2],
-    vz: [-2.2, -1.4],
-    spin: [12, 8, 12],
+    x: [-0.28, 0.28],
+    y: [1.5, 1.9],
+    z: [0.78, 0.98],
+    vx: [-0.22, 0.22],
+    vy: [-0.6, -0.1],
+    vz: [-3.2, -2.6],
+    spin: [6, 4, 6],
   },
-  contact: { friction: 0.45, restitution: 0.6 },
-  damping: { linear: 0.06, angular: 0.12 },
+  contact: { friction: 1.15, restitution: 0.28 },
+  damping: { linear: 0.0, angular: 0.8 },
   sleep: { speedLimit: 0.35, timeLimit: 0.25 },
-  rest: { lin: 0.21, ang: 0.51 },
+  rest: { lin: 0.002, ang: 0.006 },
 };
 
 export const LIN_SLEEP = THROW.rest.lin;

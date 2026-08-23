@@ -39,14 +39,47 @@ Measured from the code on `5794c35`:
   per-pose helper (`sitY` → `restOffsetY`) exists and is never called. With
   the slide gone this must be fixed, not worked around.
 
+### Corrections from tuning (2026-08-23)
+
+Two things this spec asserted turned out to be wrong, and both of them shaped
+the numbers everywhere else:
+
+- **The die is ~1.6 units across, not 0.72.** `DIE_SCALE = 0.72` is a *scale
+  factor* applied to geometry of circumradius 1.12–1.22
+  (`IcosahedronGeometry(1.12)`, `BoxGeometry(1.22, …)`,
+  `TetrahedronGeometry(1.15)`, and a radius-1 cone pair for d10/d100), so the
+  die's circumradius is **≈ 0.82 world units**. §3 below and the original §4
+  both read it as 0.72 and sized the throw against a die half its real size.
+  The visible consequence was that `launch.z` ran to 1.4 against a wall at
+  1.62: the die spawned 0.59 units *inside* the wall on most rolls and the
+  solver ejected it at up to 10 u/s, which is where the wall-hit counts of
+  3–7 a roll came from.
+- **The tray is a throw tunable, and it grew.** The four walls are invisible
+  physics bounds, not scenery — the backdrop is a 2D film and the camera
+  frames the die wherever it lands — so their size belongs in `THROW` with
+  everything else it trades against. `THROW.tray` now holds the half-extents
+  and `dice3d.js` builds the wall planes from it; `debug()` reports it so
+  tests read the bounds the walls were actually built from. At the original
+  3.44 × 3.24 a die 1.6 across had about one die-width of free travel, which
+  is why the first tuning pass could not reach the acceptance from any
+  direction.
+
 ## 3. World model (unchanged from sub-spec 1 §2, restated for what matters here)
 
 The die is a hero object over a 2D film backdrop. The physics "table" is a
-tray: floor at `y = 0`, walls at `x = ±1.72`, `z = ±1.62`, ceiling at `9.4`.
+tray: floor at `y = 0`, ceiling at `9.4`, and four walls at `±THROW.tray.x`
+and `±THROW.tray.z` — **`3.0 × 2.8` as tuned, not the `1.72 / 1.62` this
+section carried originally**; see §2's corrections and §4. The die's
+circumradius is 0.82, so it is ~1.6 units across, not 0.72.
+
 The camera looks at the die, so **wherever the die lands it is centred on
 screen after the crane**; "stays where it lands" is about the motion (no
-glide), not the final composition. The blob shadow follows the die; the
-shadow-catcher disc (radius 3.4) already covers the whole tray.
+glide), not the final composition. The blob shadow follows the die. The
+shadow-catcher disc (radius 3.4) no longer reaches the tray's corners
+(`hypot(3.0, 2.8) = 4.10`), but it covers every position the die can actually
+rest in: clearance keeps its centre inside `hypot(2.18, 1.98) = 2.94`. The
+flight camera (13.6 up, 54° vertical) sees ±6.93 in z and ±9.86 in x, so the
+larger tray is still comfortably in frame.
 
 ## 4. The throw — a profile in `physics-roll.js`
 
@@ -59,19 +92,20 @@ export const THROW = {
   gravityY: -120,          // was -48; the floor §8's "heavy" test allows
   physStep: 1 / 120,       // was 1/60; higher speeds need finer steps
   flightMaxMs: 2500,       // was 6800: hard cap on the silent sim
+  tray: { x: 3.0, z: 2.8 },// half-extents of the four walls; see §2 and below
   launch: {
-    x: [-0.5, 0.5],        // across the tray
-    y: [2.4, 2.9],         // was 4.7–5.45: a hand, not a drop from the ceiling
-    z: [0.55, 0.78],       // NOT 1.15–1.4 — see "the launch box" below
-    vx: [-0.4, 0.4],
-    vy: [-1.0, -0.2],      // already moving down, slightly
-    vz: [-2.2, -1.4],      // was -3.5…-2.35: thrown, but the tray is small
-    spin: [12, 8, 12],     // ± rad/s per axis; was 34/22/34 ÷ 2 → 17/11/17
+    x: [-0.28, 0.28],      // across the tray
+    y: [1.5, 1.9],         // was 4.7–5.45: a hand, not a drop from the ceiling
+    z: [0.78, 0.98],       // clear of the +z wall by more than the die's 0.82
+    vx: [-0.22, 0.22],
+    vy: [-0.6, -0.1],      // already moving down, slightly
+    vz: [-3.2, -2.6],      // was -3.5…-2.35: thrown, not dropped
+    spin: [6, 4, 6],       // ± rad/s per axis; was 34/22/34 ÷ 2 → 17/11/17
   },
-  contact: { friction: 0.45, restitution: 0.6 },     // was 0.4 / 0.42
-  damping: { linear: 0.06, angular: 0.12 },          // was 0.012 / 0.035
+  contact: { friction: 1.15, restitution: 0.28 },    // was 0.4 / 0.42
+  damping: { linear: 0.0, angular: 0.8 },            // was 0.012 / 0.035
   sleep: { speedLimit: 0.35, timeLimit: 0.25 },      // was 0.22 / 0.55
-  rest: { lin: 0.21, ang: 0.51 },                    // isSleepy thresholds; were 0.16 / 0.48
+  rest: { lin: 0.002, ang: 0.006 },                  // isSleepy thresholds; were 0.16 / 0.48
 };
 ```
 
@@ -81,37 +115,34 @@ nothing else has to change its imports). `dice3d.js` reads `THROW.contact`,
 `THROW.damping`, `THROW.sleep`, `THROW.physStep` where it currently has
 literals (`makeDieBody`, the `ContactMaterial`, `PHYS_STEP`).
 
-**The launch box.** `launch.z` looks timid next to the 1.15–1.4 the spec
-started with, and it is the most important number here. `DIE_SCALE = 0.72` is
-a *scale factor* on geometry of circumradius 1.12–1.22, so the die's
-circumradius is ~0.72–0.83 and it is **~1.6 units across, not 0.72** — §3's
-figure is wrong by about 2×. At `z = 1.4` the die's far vertex therefore
-reached `z = 2.21` against the +z wall at 1.62 and spawned 0.59 units *inside*
-it; the solver ejected it, which is where the wall-hit counts of 3–7 a roll
-came from. Holding `z ≤ 0.78` keeps every die clear at spawn and dropped mean
-wall hits to 1.5–3.0.
+**The tray is the number the rest is derived from.** `THROW.tray` holds the
+half-extents of the four invisible walls, `dice3d.js` builds the wall planes
+from it, and `debug()` reports it so tests read the bounds the walls were
+actually built from rather than restating them. Two constraints follow from
+the die's real circumradius of 0.82 (§2):
 
-**What the tuning reached, and what it could not.** Measured over 68 profiles;
-the final soak (`scripts/throw-soak.mjs 10`) holds these §9 bounds on all seven
-dice: p95 `flightMs` ≤ 1208 (bound 2000), `heldFrames` 0 in 70/70 rolls, every
-landing clear of the walls (max |x| 1.21, max |z| 1.20 against 1.42 / 1.32),
-and click-to-value 1130–1826 ms (bound 2200). Two bounds are **not reachable by
-any `THROW` value** and need a decision outside this profile:
+- **Spawn.** Every launch draw must keep the whole die inside the tray —
+  `|x| + 0.82 < tray.x` and `z + 0.82 < tray.z`. Below that the die spawns
+  interpenetrating a wall and the solver ejects it at up to 10 u/s, which is
+  what the original `z` up to 1.4 against a wall at 1.62 did on most rolls.
+  `physics-roll.test.js` asserts this over 500 draws.
+- **Landing.** A roll must come to rest with `0.82 + 0.3` of clearance, so the
+  usable landing area is a good deal smaller than the tray. At 2.6 × 2.4 four
+  of the seven dice ended against a wall; at 3.0 × 2.8 none do.
 
-- **median `flightMs` 900–1700.** Reached 646–842. The die is half the tray
-  wide (above), so at `gravityY ≤ -120` the fall from the maximum legal launch
-  height takes ~0.21 s and the whole motion is bounded to ~0.5–0.9 s. Only
-  restitution buys more, and restitution multiplies contacts.
-- **`bounces` 1–4 in ≥ 90 %.** Reached 0–20 %. §7's counter increments once per
-  *contact equation*, not once per bounce: one flat d100 landing emits three
-  `collide` events in a single physics step, and this soak logged a d10 roll at
-  27. A die that bounces twice has already spent the budget. De-duplicating
-  same-step contacts narrows it (d20 12.3 → 9.5 raw → same-step at e = 0.6) but
-  does not close it.
+**Two dice set the limits, and they pull opposite ways.** d4 is the shortest
+roll in the set — a tetrahedron lands on a big flat face and stops — and
+d12/d20 are the roundest, so they roll longest and tip most. Everything that
+lifts d4's median pushes the round dice past the landing bound: at
+`restitution` 0.44 d4 reaches 637 ms and two dice lose their landing bound and
+d20 its bounce share. The profile above is the balance point; §9's median floor
+of 450 is set by d4 and nothing else.
 
-The fix for the second is in `dice3d.js`'s `onCollide`, not here; the fix for
-the first is the tray-to-die ratio. Both are recorded in
-`.superpowers/sdd/2026-08-23-hand-throw/task-5-report.md` with the measurements.
+**`rest` is the lever that ends a throw.** At 0.002/0.006 the silent
+simulation runs until the die is genuinely still, which is worth 100–275 ms per
+die over the old 0.21/0.51 and adds no contacts — the tail is far below the
+impact floor. It is only tunable because `isSleepy`'s unit test now passes its
+thresholds explicitly instead of letting them default to this profile.
 
 ## 5. Replay: real time, interpolated
 
@@ -226,6 +257,14 @@ into §4.
 - The two sub-spec 1 controls (tail / hold yaw) must still fail invariant 3.
 
 ## 9. Acceptance
+
+> **These numbers are superseded by the controller's ruling of 2026-08-23**
+> and are left here for Task 6 to rewrite, which owns this section. The
+> bounds actually enforced are in `scripts/throw-soak.mjs` (`BOUNDS`) and
+> `e2e/roll.spec.js`: median `flightMs` 450–1300, p95 ≤ 1800, `bounces` 1–5
+> in ≥ 90 %, `wallHits` ≤ 1 in ≥ 80 %, `heldFrames` 0, no landing within
+> `0.82 + 0.3` of a wall, time-to-number ≤ 2200 ms. `bounces` also changed
+> meaning: one impact, not one contact equation, above a 2.2 u/s floor.
 
 - `pnpm verify` exit 0 with the new assertions.
 - Across the soak (7 dice × 10 rolls): median `flightMs` 900–1700; 95th

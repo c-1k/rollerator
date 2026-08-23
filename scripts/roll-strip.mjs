@@ -193,12 +193,12 @@ try {
    * Copy `n` frames off the live canvas, spaced across the flight, then
    * encode them once the die is down. Returns crops around the tray: the
    * flight camera is 13.6 units up at a 54 degree vertical field of view, so
-   * the tray is only ~23% of the canvas height and a full frame is mostly
-   * backdrop.
+   * it sees 13.9 units of height and a full frame is mostly backdrop. Half of
+   * that is 6.9 units, which covers the 6.0 x 5.6 tray with margin.
    */
   const captured = await page.evaluate(async (n) => {
     const canvas = document.querySelector("#die-stage");
-    const side = Math.round(canvas.height * 0.42);
+    const side = Math.round(canvas.height * 0.5);
     const sx = Math.round((canvas.width - side) / 2);
     const sy = Math.round((canvas.height - side) / 2);
     const copy = () => {

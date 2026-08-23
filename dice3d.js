@@ -1019,11 +1019,14 @@ export function createDiceStage(canvas, video) {
     return body;
   }
   const floorBody = addPlane([0, 1, 0], 0, 0, 0);
+  // The walls are invisible physics bounds, not scenery: the backdrop is a 2D
+  // film and the camera frames the die wherever it lands, so their size is a
+  // throw tunable and lives in THROW with the rest of them.
   const wallBodies = [
-    addPlane([-1, 0, 0], 1.72, 0, 0),
-    addPlane([1, 0, 0], -1.72, 0, 0),
-    addPlane([0, 0, -1], 0, 0, 1.62),
-    addPlane([0, 0, 1], 0, 0, -1.62),
+    addPlane([-1, 0, 0], THROW.tray.x, 0, 0),
+    addPlane([1, 0, 0], -THROW.tray.x, 0, 0),
+    addPlane([0, 0, -1], 0, 0, THROW.tray.z),
+    addPlane([0, 0, 1], 0, 0, -THROW.tray.z),
   ];
   addPlane([0, -1, 0], 0, 9.4, 0);
 
@@ -1110,6 +1113,12 @@ export function createDiceStage(canvas, video) {
   let camTween = 0;
   let lastTick = performance.now();
   const PHYS_STEP = THROW.physStep;
+  // A contact slower than this is the die settling, not striking.
+  const IMPACT_SPEED_FLOOR = 2.2;
+  // How long after a counted impact further contacts belong to the same one.
+  // Well above PHYS_STEP (8.3 ms), so the contact points of one landing always
+  // collapse together; well below the gap between real bounces.
+  const BOUNCE_REFRACTORY_MS = 40;
   const rolls = createRollController();
   let camFrom = idleCam.clone();
   let camTo = idleCam.clone();
@@ -1654,13 +1663,31 @@ export function createDiceStage(canvas, video) {
   function simulateTrajectory() {
     const frames = [readFrame()];
     const metrics = { flightMs: 0, bounces: 0, wallHits: 0 };
+    let ms = 0;
+    // One bounce is one IMPACT, not one contact point. A die landing flat puts
+    // several contact equations on the floor in a single step and cannon-es
+    // fires `collide` for every one of them -- a flat d100 landing counts three
+    // and a tumbling d10 reached 27, which is what made "1-4 bounces"
+    // unreachable while the die was visibly bouncing twice. Count the first
+    // event of an impact and ignore the rest: never twice in one step (all
+    // events of a step share `ms`), and never inside the refractory window.
+    let lastFloorMs = -Infinity;
+    let lastWallMs = -Infinity;
+    const counted = (last) => ms !== last && ms - last >= BOUNCE_REFRACTORY_MS;
     const onCollide = (e) => {
       const speed = Math.abs(e.contact.getImpactVelocityAlongNormal());
-      if (e.body === floorBody && speed > 0.8) metrics.bounces += 1;
-      else if (wallBodies.includes(e.body) && speed > 0.8) metrics.wallHits += 1;
+      if (speed <= IMPACT_SPEED_FLOOR) return;
+      if (e.body === floorBody) {
+        if (!counted(lastFloorMs)) return;
+        lastFloorMs = ms;
+        metrics.bounces += 1;
+      } else if (wallBodies.includes(e.body)) {
+        if (!counted(lastWallMs)) return;
+        lastWallMs = ms;
+        metrics.wallHits += 1;
+      }
     };
     dieBody.addEventListener("collide", onCollide);
-    let ms = 0;
     try {
       while (ms < FLIGHT_MAX_MS) {
         world.step(PHYS_STEP);
@@ -1899,6 +1926,9 @@ export function createDiceStage(canvas, video) {
         meshPos: die ? [die.position.x, die.position.y, die.position.z] : null,
         normals: die ? meshNormals(die) : null,
         landedPos: lastRoll?.landedPos ?? null,
+        // Half-extents of the physics tray, so tests read the bounds the walls
+        // were actually built from instead of restating them as literals.
+        tray: { x: THROW.tray.x, z: THROW.tray.z },
         reveal: lastRoll?.reveal ?? null,
         flightMs: lastRoll?.flightMs ?? null,
         bounces: lastRoll?.bounces ?? null,

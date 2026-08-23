@@ -287,11 +287,27 @@ describe("FACE_UV_YAW", () => {
 });
 
 describe("isSleepy", () => {
-  it("is true only when linear and angular speed are both tiny", () => {
-    assert.equal(isSleepy([0, 0, 0], [0, 0, 0]), true);
-    assert.equal(isSleepy([0.2, 0, 0], [0, 0.5, 0]), true);
-    assert.equal(isSleepy([0.4, 0, 0], [0, 0.5, 0]), false);
-    assert.equal(isSleepy([0.2, 0, 0], [0, 1.0, 0]), false);
+  // Thresholds are passed explicitly. They used to be left to default to
+  // THROW.rest, which quietly made this a test of the PROFILE: every attempt
+  // to tune the settle thresholds broke it, so the tuning task could not move
+  // the one value that decides when a throw ends. What belongs here is the
+  // behaviour of the function -- both speeds under their own threshold.
+  it("is true only when both speeds are under their own threshold", () => {
+    const lin = 0.3;
+    const ang = 0.9;
+    assert.equal(isSleepy([0, 0, 0], [0, 0, 0], lin, ang), true);
+    assert.equal(isSleepy([0.2, 0, 0], [0, 0.5, 0], lin, ang), true);
+    assert.equal(isSleepy([0.4, 0, 0], [0, 0.5, 0], lin, ang), false);
+    assert.equal(isSleepy([0.2, 0, 0], [0, 1.0, 0], lin, ang), false);
+    // It is the magnitude that counts, not any one component.
+    assert.equal(isSleepy([0.2, 0.2, 0.2], [0, 0, 0], lin, ang), false);
+  });
+
+  it("defaults to the profile's own settle thresholds", () => {
+    const under = THROW.rest.lin * 0.5;
+    const over = THROW.rest.lin * 2;
+    assert.equal(isSleepy([under, 0, 0], [0, THROW.rest.ang * 0.5, 0]), true);
+    assert.equal(isSleepy([over, 0, 0], [0, THROW.rest.ang * 0.5, 0]), false);
   });
 });
 
@@ -429,6 +445,25 @@ describe("THROW profile", () => {
     }
   });
 
+  it("every launch draw fits the whole die inside the tray", () => {
+    // The die's circumradius is ~0.82 (DIE_SCALE 0.72 on circumradius-1.12-1.22
+    // geometry), NOT 0.72 -- and a launch that clears the wall by less than
+    // that spawns the die inside it, where the solver ejects it at ~10 u/s.
+    // That was real: launch.z ran to 1.4 against a wall at 1.62.
+    const R = 0.82;
+    for (let i = 0; i < 500; i++) {
+      const p = throwPose();
+      assert.ok(
+        Math.abs(p.position[0]) + R < THROW.tray.x,
+        `x ${p.position[0]} is inside the x wall at ${THROW.tray.x}`,
+      );
+      assert.ok(
+        Math.abs(p.position[2]) + R < THROW.tray.z,
+        `z ${p.position[2]} is inside the z wall at ${THROW.tray.z}`,
+      );
+    }
+  });
+
   it("derived constants come from the profile", () => {
     assert.equal(GRAVITY_Y, THROW.gravityY);
     assert.equal(FLIGHT_MAX_MS, THROW.flightMaxMs);
@@ -436,6 +471,13 @@ describe("THROW profile", () => {
     assert.equal(ANG_SLEEP, THROW.rest.ang);
     assert.ok(THROW.gravityY <= -120, "heavy: at least ~2.5x the old -48");
     assert.ok(THROW.physStep <= 1 / 100, "fine steps for fast contacts");
+    // cannon-es applies damping as v *= (1 - damping) ** dt. At 1 or more the
+    // base is zero or negative: the velocity flips sign every step and grows,
+    // and the die tunnels straight out through a wall. Found the hard way at
+    // angular 1.6 and linear 1.2 -- both looked like plausible tuning values
+    // and both put the die at z = -9 with the flight pinned at its cap.
+    assert.ok(THROW.damping.linear < 1, "damping must stay under 1");
+    assert.ok(THROW.damping.angular < 1, "damping must stay under 1");
   });
 });
 

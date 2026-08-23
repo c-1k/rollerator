@@ -10,6 +10,10 @@
  * it against the acceptance in the design spec (section 9), so tuning the
  * profile is a measurement and not a matter of opinion.
  *
+ * It reads the tray half-extents off debug() rather than restating them,
+ * because the walls are built from THROW.tray and a literal here would go on
+ * reporting "clear of the wall" after the tray moved.
+ *
  *   node scripts/throw-soak.mjs            # 10 rolls per die, full mode
  *   node scripts/throw-soak.mjs 20 --fast  # 20 rolls per die, tuning mode
  *   node scripts/throw-soak.mjs 10 --env=ice
@@ -56,19 +60,25 @@ if (!Number.isInteger(N) || N < 1) {
 }
 
 /**
- * Spec section 9, as numbers. The tray is 3.44 x 3.24 world units with walls
- * at |x| = 1.72 and |z| = 1.62; "clear of a wall" is half the die's width.
+ * Spec section 9, as numbers, corrected 2026-08-23 for the real geometry.
+ * The tray half-extents are NOT here: they are a THROW tunable, read off
+ * debug().tray at run time so this script cannot disagree with the walls the
+ * stage actually built. "Clear of a wall" is the die's own circumradius plus
+ * a margin -- DIE_RADIUS is DIE_SCALE (0.72) times the largest geometry
+ * circumradius (1.22), not 0.72, which is only the scale factor.
  */
 const BOUNDS = {
-  medianFlightMs: [900, 1700],
-  p95FlightMs: 2000,
-  bounces: [1, 4],
+  medianFlightMs: [450, 1300],
+  p95FlightMs: 1800,
+  bounces: [1, 5],
   bounceShare: 0.9,
+  wallHits: 1,
+  wallHitShare: 0.8,
   heldFrames: 0,
-  wallClear: 0.3,
+  wallMargin: 0.3,
+  dieRadius: 0.82,
   timeToNumberMs: 2200,
 };
-const TRAY = { x: 1.72, z: 1.62 };
 
 /** Start the static server unless one is already answering on PORT. */
 async function ensureServer() {
@@ -173,9 +183,26 @@ try {
   await page.selectOption("#environment", ENV);
   await page.waitForTimeout(3000);
 
+  // The walls are built from THROW.tray, so ask the stage what they are
+  // rather than restating them here where the two could drift apart.
+  const tray = await page.evaluate(() => window.__dice.debug().tray);
+  if (!tray) {
+    throw new Error(
+      "debug() reported no tray -- this build predates the tray tunable, " +
+        "and the landing bounds below would be measured against nothing.",
+    );
+  }
+  const clearX = tray.x - (BOUNDS.dieRadius + BOUNDS.wallMargin);
+  const clearZ = tray.z - (BOUNDS.dieRadius + BOUNDS.wallMargin);
+
   console.log(
     `\n  throw soak: ${N} rolls x ${DICE.length} dice in "${ENV}"` +
       `${FAST ? "  [--fast]" : ""}`,
+  );
+  console.log(
+    `  tray ±${tray.x} x ±${tray.z}; a landing must stay inside ` +
+      `±${round(clearX)} x ±${round(clearZ)} (die radius ` +
+      `${BOUNDS.dieRadius} + ${BOUNDS.wallMargin} margin)`,
   );
   if (FAST) {
     console.log(
@@ -223,11 +250,36 @@ try {
     // where the value is reported) and the DOM's (click to #hort visible).
     let toCrane = null;
     let toNumber = null;
+    let flightWallMs = null;
+    let timedFlightMs = null;
     if (!FAST) {
       // A #hort left over from the previous die would satisfy the wait below
       // instantly and report a time-to-number of nothing at all, so prove it
       // is hidden before starting the clock.
       await page.locator("#hort").waitFor({ state: "hidden", timeout: 15_000 });
+      // Time the replay phase from inside the page as well as the click from
+      // outside it. `tick` clamps dt at 50 ms, so on a renderer slower than
+      // 20 fps the replay clock falls behind the wall clock and the throw
+      // plays in slow motion -- which inflates the click-to-number time by an
+      // amount that has nothing to do with the throw. Measuring the flight's
+      // wall time is what lets that be subtracted back out, and reported.
+      const observer = page.evaluate(
+        () =>
+          new Promise((done) => {
+            let start = null;
+            const tick = () => {
+              const p = window.__dice.debug().phase;
+              if (start === null) {
+                if (p === "flight") start = performance.now();
+              } else if (p !== "flight") {
+                done(Math.round(performance.now() - start));
+                return;
+              }
+              requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+          }),
+      );
       const t0 = Date.now();
       await page.click("#roll");
       await page.waitForFunction(
@@ -240,12 +292,20 @@ try {
         .locator("#hort")
         .waitFor({ state: "visible", timeout: 60_000 });
       toNumber = Date.now() - t0;
+      flightWallMs = await observer;
       await page.waitForFunction(
         () => window.__dice.debug().phase === "idle",
         null,
         { timeout: 30_000 },
       );
+      timedFlightMs = await page.evaluate(() => window.__dice.debug().flightMs);
     }
+    // What a player on a renderer that keeps up would have waited: the same
+    // click-to-number, with the replay's slow-motion surplus taken out.
+    const projected =
+      FAST || flightWallMs == null
+        ? null
+        : Math.round(toNumber - flightWallMs + timedFlightMs);
 
     const flights = samples.map((s) => s.flightMs);
     const bounces = samples.map((s) => s.bounces);
@@ -266,11 +326,15 @@ try {
       bounceHist: histogram(bounces),
       bounceShare: inRange / bounces.length,
       wallMean: mean(walls),
+      wallQuietShare:
+        walls.filter((w) => w <= BOUNDS.wallHits).length / walls.length,
       heldMax: FAST ? null : Math.max(...held),
       maxX,
       maxZ,
       toCrane,
       toNumber,
+      projected,
+      replaySpeed: flightWallMs ? timedFlightMs / flightWallMs : null,
     };
     rows.push(row);
 
@@ -291,14 +355,27 @@ try {
           `${round(row.bounceShare * 100, 0)}% (need ` +
           `${BOUNDS.bounceShare * 100}%)`,
       );
+    if (row.wallQuietShare < BOUNDS.wallHitShare)
+      fail(
+        `wallHits <= ${BOUNDS.wallHits} in only ` +
+          `${round(row.wallQuietShare * 100, 0)}% (need ` +
+          `${BOUNDS.wallHitShare * 100}%)`,
+      );
     if (!FAST && row.heldMax > BOUNDS.heldFrames)
       fail(`heldFrames max ${row.heldMax} -- the replay stuttered`);
-    if (maxX > TRAY.x - BOUNDS.wallClear)
-      fail(`landed ${round(TRAY.x - maxX)} from the x wall`);
-    if (maxZ > TRAY.z - BOUNDS.wallClear)
-      fail(`landed ${round(TRAY.z - maxZ)} from the z wall`);
-    if (!FAST && toCrane > BOUNDS.timeToNumberMs)
-      fail(`click to number ${toCrane} ms > ${BOUNDS.timeToNumberMs}`);
+    if (maxX > clearX)
+      fail(`landed ${round(maxX - clearX)} past the x landing bound`);
+    if (maxZ > clearZ)
+      fail(`landed ${round(maxZ - clearZ)} past the z landing bound`);
+    // Held against the projection, not the raw wall clock: under SwiftShader
+    // this scene renders at ~6 fps and the dt clamp turns the replay into
+    // slow motion, so the raw figure measures the renderer. The projection
+    // still fails if the THROW is too long, which is the thing being tuned.
+    if (!FAST && projected > BOUNDS.timeToNumberMs)
+      fail(
+        `click to number ${projected} ms > ${BOUNDS.timeToNumberMs} ` +
+          `(raw ${toNumber} ms at ${round(timedFlightMs / flightWallMs, 2)}x replay speed)`,
+      );
 
     console.log(
       `\n  ${kind.padEnd(4)} flightMs  med ${String(round(row.med, 0)).padStart(5)}` +
@@ -307,7 +384,8 @@ try {
     );
     console.log(
       `       bounces   [${row.bounceHist}]  in-range ` +
-        `${round(row.bounceShare * 100, 0)}%   wallHits mean ${round(row.wallMean)}`,
+        `${round(row.bounceShare * 100, 0)}%   wallHits mean ${round(row.wallMean)}` +
+        `  <=${BOUNDS.wallHits} in ${round(row.wallQuietShare * 100, 0)}%`,
     );
     console.log(
       `       landing   max|x| ${round(maxX)}  max|z| ${round(maxZ)}` +
@@ -315,7 +393,8 @@ try {
     );
     if (!FAST)
       console.log(
-        `       click to  number ${toCrane} ms   #hort visible ${toNumber} ms`,
+        `       click to  #hort ${toNumber} ms raw, ${projected} ms at 1x replay` +
+          ` (this renderer replayed at ${round(row.replaySpeed, 2)}x)`,
       );
   }
 
@@ -326,8 +405,8 @@ try {
   if (!FAST) {
     const gap = rows.map((r) => r.toNumber - r.toCrane);
     console.log(
-      `  #hort lags the reported value by ${Math.min(...gap)}-${Math.max(...gap)} ms:` +
-        " the quote waits on the environment film's `ended`, not the throw.",
+      `  #hort lands ${Math.min(...gap)}-${Math.max(...gap)} ms after the value is` +
+        " reported: the quote follows the throw, not the environment film.",
     );
   }
 
