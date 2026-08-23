@@ -1,0 +1,70 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.10/schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "files": {
+    "includes": [
+      "**",
+      "!public/**",
+      "!jobs/**",
+      "!fonts/**",
+      "!.artifacts/**",
+      "!test-results/**",
+      "!playwright-report/**",
+
+      // ---------------------------------------------------------------
+      // TEMPORARY (added 2026-08-22, chore/agentic-kit).
+      //
+      // app.js and dice3d.js are being rewritten in place right now by
+      // the physics port (.grok/workflows/port-dice-physics.rhai).
+      // Touching them here would collide head-on with that work, so they
+      // are held out of the gate for exactly as long as that port is in
+      // flight.
+      //
+      // TO CLOSE: once the physics port has landed on main, delete the
+      // four lines below and run `pnpm format`. That is the whole fix.
+      // Their only outstanding findings are formatting, organizeImports,
+      // and 5x useConst -- no logic changes required.
+      // ---------------------------------------------------------------
+      "!app.js",
+      "!dice3d.js",
+      "!index.html",
+      "!physics-roll*.js"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 80
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "suspicious": {
+        // Biome suggests "!dir/" over "!dir/**", but "!dir/" does not
+        // actually exclude nested files (verified 2026-08-22, Biome
+        // 2.5.10). Correct behaviour wins over the style preference.
+        "useBiomeIgnoreFolder": "off"
+      }
+    }
+  },
+  "javascript": { "formatter": { "quoteStyle": "double" } },
+  "overrides": [
+    {
+      // Files the live site actually serves.
+      //
+      // The linter stays ON for these -- it is what catches real defects.
+      // Only the FORMATTER is off, so that adopting Biome does not rewrite
+      // 600+ lines of shipping code as a side effect of adding CI. A
+      // reformat changes every byte the CDN serves, and this repo deploys
+      // straight from the repo root with no build step in between, so
+      // "just formatting" is still a full-content deploy.
+      //
+      // TO CLOSE: reformat them as their own deliberate commit, verify the
+      // rendered site is unchanged, then delete this override.
+      "includes": ["quotes.js", "share-card.js", "styles.css", "vercel.json"],
+      "formatter": { "enabled": false }
+    }
+  ]
+}

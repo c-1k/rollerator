@@ -1,0 +1,20 @@
+#!/bin/sh
+# Fast gate: lint + unit tests. The browser suite takes ~2 minutes and
+# belongs in CI, not in the path of every commit.
+#
+# Installed by `pnpm install` (the prepare script points core.hooksPath
+# here). Bypass with `git commit --no-verify` when you genuinely mean to.
+set -e
+
+if [ -n "$SKIP_HOOKS" ]; then
+  echo "pre-commit: skipped (SKIP_HOOKS set)"
+  exit 0
+fi
+
+echo "pre-commit: lint"
+pnpm run lint
+
+echo "pre-commit: unit tests"
+pnpm run test
+
+echo "pre-commit: ok"

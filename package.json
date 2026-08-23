@@ -1,0 +1,26 @@
+{
+  "name": "rollerator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The Rollerator \u2014 a cinematic D&D dice simulator.",
+  "packageManager": "pnpm@10.27.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "node scripts/dev-server.mjs",
+    "test": "node --test",
+    "test:visual": "playwright test",
+    "test:visual:update": "playwright test --update-snapshots",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "shot": "node scripts/roll-shot.mjs",
+    "verify": "pnpm run lint && pnpm run test && pnpm run test:visual",
+    "prepare": "git config core.hooksPath .githooks || true"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.3.14",
+    "@playwright/test": "^1.58.1"
+  }
+}

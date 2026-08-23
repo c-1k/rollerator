@@ -1,6 +1,35 @@
+# Rollerator deploys as plain static files: vercel.json pins
+# framework/install/build to null and outputDirectory to ".".
+# Everything below is development-only and must never be uploaded.
+
+# Keep package.json off the deployment entirely. With no manifest present
+# Vercel's zero-config detection cannot decide to run an install or build
+# step against a site that has neither.
+package.json
+pnpm-lock.yaml
+node_modules
+biome.jsonc
+playwright.config.js
+
+# Source assets and generation jobs (large, and not served)
 public/dice
 public/env/src
 public/rolls
 jobs
+
+# Tests, tooling and docs
 *.test.js
+e2e
+scripts
+.artifacts
+test-results
+playwright-report
+.github
+.githooks
+.claude
+.grok
+docs
+CLAUDE.md
+README.md
+INDEX.md
 .DS_Store
