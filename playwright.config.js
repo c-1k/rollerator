@@ -5,8 +5,12 @@ const baseURL = `http://localhost:${PORT}`;
 
 export default defineConfig({
   testDir: "e2e",
-  // The dice are a physics simulation: give a roll room to come to rest.
-  timeout: 60_000,
+  // A cold load is ~18s locally and CI runs about 2x slower, so any test
+  // that loads the page and then does one thing needs well over a minute.
+  // (Measured 2026-08-22 on the physics port: load 18.0s, reload 17.7s,
+  // roll 5.7s. The pre-port app loaded in 6.7s; the 60s budget was tuned
+  // against that.)
+  timeout: 120_000,
   expect: { timeout: 15_000, toHaveScreenshot: { maxDiffPixelRatio: 0.02 } },
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
