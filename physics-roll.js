@@ -1,13 +1,34 @@
-export const LIN_SLEEP = 0.16;
-export const ANG_SLEEP = 0.48;
-export const FLIGHT_MAX_MS = 6800;
-export const SNAP_MS = 900;
-export const HOLD_MS = 1600;
-export const PRESENT_MS = 2400;
-export const GRAVITY_Y = -48;
-export const ZOOM_MS = 2600;
-export const SLOWMO_AFTER_MS = 720;
-export const SLOWMO_MIN = 0.22;
+/**
+ * The throw profile. Every tunable of the hand throw lives here so it can be
+ * unit-tested and tuned in one place. Units are world units (the die is
+ * DIE_SCALE = 0.72 across; the tray is 3.44 x 3.24), seconds, radians.
+ * Values are the tuned result of the soak in the plan's Task 5.
+ */
+export const THROW = {
+  gravityY: -160,
+  physStep: 1 / 120,
+  flightMaxMs: 2500,
+  launch: {
+    x: [-0.5, 0.5],
+    y: [2.0, 2.6],
+    z: [1.15, 1.4],
+    vx: [-0.8, 0.8],
+    vy: [-2.0, -1.0],
+    vz: [-5.5, -4.0],
+    spin: [28, 18, 28],
+  },
+  contact: { friction: 0.55, restitution: 0.28 },
+  damping: { linear: 0.06, angular: 0.12 },
+  sleep: { speedLimit: 0.35, timeLimit: 0.25 },
+  rest: { lin: 0.3, ang: 0.9 },
+};
+
+export const LIN_SLEEP = THROW.rest.lin;
+export const ANG_SLEEP = THROW.rest.ang;
+export const FLIGHT_MAX_MS = THROW.flightMaxMs;
+export const GRAVITY_Y = THROW.gravityY;
+export const HOLD_MS = 800;
+export const CRANE_MS = 400;
 
 function len(v) {
   return Math.hypot(v[0], v[1], v[2]);
@@ -139,28 +160,31 @@ export function uniqueVertsAndFaces(positions, decimals = 4) {
   return { vertices, faces };
 }
 
+function pick(rng, [lo, hi]) {
+  return lo + rng() * (hi - lo);
+}
+
 export function throwPose(rng = Math.random) {
-  const x = (rng() - 0.5) * 0.95;
-  const z = 1.08 + rng() * 0.36;
-  const y = 4.7 + rng() * 0.75;
+  const L = THROW.launch;
   return {
-    position: [x, y, z],
-    velocity: [-x * 1.25 + (rng() - 0.5) * 0.7, -1.55 - rng() * 2.2, -2.35 - rng() * 1.15],
-    angularVelocity: [(rng() - 0.5) * 34, (rng() - 0.5) * 22, (rng() - 0.5) * 34],
+    position: [pick(rng, L.x), pick(rng, L.y), pick(rng, L.z)],
+    velocity: [pick(rng, L.vx), pick(rng, L.vy), pick(rng, L.vz)],
+    angularVelocity: [
+      (rng() - 0.5) * 2 * L.spin[0],
+      (rng() - 0.5) * 2 * L.spin[1],
+      (rng() - 0.5) * 2 * L.spin[2],
+    ],
   };
 }
+
+const SLOWMO_AFTER_MS = 720;
+const SLOWMO_MIN = 0.22;
 
 export function slowMoScale(linSpeed, angSpeed, flightMs, afterMs = SLOWMO_AFTER_MS) {
   if (flightMs < afterMs) return 1;
   const energy = linSpeed + angSpeed * 0.2;
   const u = Math.min(1, Math.max(0, (energy - 0.35) / 3.4));
   return SLOWMO_MIN + (1 - SLOWMO_MIN) * u * u;
-}
-
-export function flightZoom(elapsedMs, durationMs = ZOOM_MS) {
-  if (durationMs <= 0) return 1;
-  const u = Math.min(1, Math.max(0, elapsedMs / durationMs));
-  return u * u * (3 - 2 * u);
 }
 
 export function landedValue(normals, quat, values, worldUp = [0, 1, 0]) {

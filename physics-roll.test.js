@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  ANG_SLEEP,
   FACE_UV_YAW,
+  FLIGHT_MAX_MS,
   GRAVITY_Y,
-  PRESENT_MS,
+  LIN_SLEEP,
+  THROW,
   adjacentFaces,
   assignPolyhedronValues,
   faceValueTable,
-  flightZoom,
   icosahedronFaceNormals,
   isSleepy,
   landedValue,
@@ -99,23 +101,16 @@ describe("uniqueVertsAndFaces", () => {
 });
 
 describe("throwPose", () => {
-  it("drops from high with downward speed, inward travel, and spin", () => {
+  it("throws from hand height with downward speed, into the tray, and with spin", () => {
     let i = 0;
     const seq = [0.2, 0.8, 0.3, 0.4, 0.6, 0.1, 0.9, 0.25, 0.75, 0.5, 0.5, 0.5];
     const rng = () => seq[i++ % seq.length];
     const pose = throwPose(rng);
-    assert.ok(pose.position[1] > 4.2, `start y ${pose.position[1]}`);
+    assert.ok(pose.position[1] < 3, `start y ${pose.position[1]}`);
     assert.ok(pose.velocity[1] < 0, `vy should fall, got ${pose.velocity[1]}`);
     assert.ok(pose.velocity[2] < 0, `vz should be toward -Z, got ${pose.velocity[2]}`);
     assert.equal(pose.angularVelocity.length, 3);
     assert.ok(pose.angularVelocity.some((v) => Math.abs(v) > 1));
-  });
-});
-
-describe("gravity and timing", () => {
-  it("uses strong gravity and a long presentation beat", () => {
-    assert.ok(GRAVITY_Y <= -42, `gravity ${GRAVITY_Y}`);
-    assert.ok(PRESENT_MS >= 1800, `present ${PRESENT_MS}`);
   });
 });
 
@@ -127,16 +122,6 @@ describe("slowMoScale", () => {
     assert.ok(lateFast > 0.7, `still-energetic late scale ${lateFast}`);
     assert.ok(lateSlow < 0.4, `resting scale ${lateSlow}`);
     assert.ok(lateSlow < lateFast);
-  });
-});
-
-describe("flightZoom", () => {
-  it("eases from 0 to 1 over the zoom window", () => {
-    almost(flightZoom(0, 2000), 0);
-    almost(flightZoom(2000, 2000), 1);
-    almost(flightZoom(4000, 2000), 1);
-    const mid = flightZoom(1000, 2000);
-    assert.ok(mid > 0.4 && mid < 0.7, `smoothstep mid ${mid}`);
   });
 });
 
@@ -314,8 +299,9 @@ describe("FACE_UV_YAW", () => {
 describe("isSleepy", () => {
   it("is true only when linear and angular speed are both tiny", () => {
     assert.equal(isSleepy([0, 0, 0], [0, 0, 0]), true);
-    assert.equal(isSleepy([0.5, 0, 0], [0, 0, 0]), false);
-    assert.equal(isSleepy([0, 0, 0], [2, 0, 0]), false);
+    assert.equal(isSleepy([0.2, 0, 0], [0, 0.5, 0]), true);
+    assert.equal(isSleepy([0.4, 0, 0], [0, 0.5, 0]), false);
+    assert.equal(isSleepy([0.2, 0, 0], [0, 1.0, 0]), false);
   });
 });
 
@@ -425,5 +411,40 @@ describe("revealCamera", () => {
     const cam = revealCamera([1, 0, 0], { ...OPTS, aim });
     assert.notStrictEqual(cam.aim, aim);
     assert.deepEqual(cam.aim, aim);
+  });
+});
+
+describe("THROW profile", () => {
+  const inRange = (v, [lo, hi]) => v >= lo && v <= hi;
+
+  it("throwPose draws every component from THROW.launch", () => {
+    const L = THROW.launch;
+    for (const seed of [0, 0.25, 0.5, 0.75, 0.999]) {
+      const rng = () => seed;
+      const p = throwPose(rng);
+      assert.ok(inRange(p.position[0], L.x), `x ${p.position[0]}`);
+      assert.ok(inRange(p.position[1], L.y), `y ${p.position[1]}`);
+      assert.ok(inRange(p.position[2], L.z), `z ${p.position[2]}`);
+      assert.ok(inRange(p.velocity[0], L.vx), `vx ${p.velocity[0]}`);
+      assert.ok(inRange(p.velocity[1], L.vy), `vy ${p.velocity[1]}`);
+      assert.ok(inRange(p.velocity[2], L.vz), `vz ${p.velocity[2]}`);
+      for (let k = 0; k < 3; k++) {
+        assert.ok(Math.abs(p.angularVelocity[k]) <= L.spin[k] + 1e-9, `spin ${k}`);
+      }
+    }
+    for (let i = 0; i < 200; i++) {
+      const p = throwPose();
+      assert.ok(p.position[1] < 3, "launch is a hand height, not a ceiling drop");
+      assert.ok(p.velocity[2] < 0, "thrown into the tray (-z)");
+    }
+  });
+
+  it("derived constants come from the profile", () => {
+    assert.equal(GRAVITY_Y, THROW.gravityY);
+    assert.equal(FLIGHT_MAX_MS, THROW.flightMaxMs);
+    assert.equal(LIN_SLEEP, THROW.rest.lin);
+    assert.equal(ANG_SLEEP, THROW.rest.ang);
+    assert.ok(THROW.gravityY <= -120, "heavy: at least ~2.5x the old -48");
+    assert.ok(THROW.physStep <= 1 / 100, "fine steps for fast contacts");
   });
 });
