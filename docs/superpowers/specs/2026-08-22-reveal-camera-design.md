@@ -370,6 +370,22 @@ approved and corrected here.
   to set `idleCam.y` to `9.2 : 8.2`. It now returns `idleCam.y - SETTLE_AIM.y`
   — identical by arithmetic, and it cannot drift. `applyFraming` always runs
   before any `computeReveal` (the constructor calls `resize()`).
+- **§7 d10, the sibling of the d100 finding.** Verifying this wave surfaced a
+  pre-existing ~10%-per-run failure the d100 correction had missed: the test
+  compared the *rendered label* against the *stage value* as if they were the
+  same number. They are not. `formatFace` renders a d10's **10** as `"0"`
+  (`dice3d.js:199`, the standard percentile face), so a d10 landing on 10 read
+  as `d10 · 0` and failed `legal()` — and would then also have failed
+  `expect(d.value).toBe(value)` with 10 vs 0. One root cause, two assertions.
+  `LEGAL` is now unambiguously the *value*-space face set, and the label is
+  asserted separately against a documented mirror of `formatFace`, which makes
+  the test catch a formatting regression instead of silently passing whenever
+  label happened to equal value. Control: the mirror was compared against the
+  real `formatFace` (imported in the page) for all 70 faces of all seven dice
+  — 0 mismatches; replacing the mirror with `String(n)` flags exactly `d10:10`
+  and `d100:0`, so the comparison is not vacuous. Whether the *result line*
+  should read `d10 · 0` or `d10 · 10` is the same product question as d100's
+  `00` vs `100`, and is left with it for sub-spec 2.
 - **§5 one reading of the reveal orientation.** `placeCamera` derived the
   camera orientation via `camera.up` + `camera.lookAt` while the tail derived
   it via `revealQuaternion` (`Matrix4.lookAt`). They agreed, but a check and an

@@ -15,9 +15,9 @@ import { upwardFaceIndex } from "../physics-roll.js";
  * All seven dice share one page load; a cold start costs ~25s under
  * SwiftShader and a roll only ~10s.
  */
-// d4..d20 show 1..sides. d100 is a percentile TENS die: ten faces labelled
-// 00, 10, ... 90 (formatFace pads the zero face to "00"); its value is the
-// tens digit x 10, so 0..90 in steps of 10.
+// The legal face set of each die, in the STAGE's value space -- what
+// debug().value reports. d4..d20 are 1..sides. d100 is a percentile TENS die:
+// ten faces valued 0, 10, ... 90.
 const LEGAL = {
   d4: { legal: (v) => v >= 1 && v <= 4 },
   d6: { legal: (v) => v >= 1 && v <= 6 },
@@ -27,6 +27,18 @@ const LEGAL = {
   d20: { legal: (v) => v >= 1 && v <= 20 },
   d100: { legal: (v) => v >= 0 && v <= 90 && v % 10 === 0 },
 };
+// The rendered label is NOT always String(value): this mirrors formatFace() in
+// dice3d.js, the two places they diverge. A d100 pads to two digits, and a
+// d10's 10 renders as the standard percentile "0" face. Asserting the label
+// against this, rather than assuming label === value, is what catches a
+// formatFace regression -- and is why d10 landing on 10 no longer reads as an
+// illegal face.
+const rendered = (kind, n) =>
+  kind === "d100"
+    ? String(n).padStart(2, "0")
+    : kind === "d10" && n === 10
+      ? "0"
+      : String(n);
 const HORT_ROLL = /^(d\d+)\s+·\s+(\d+)$/;
 
 test("every die rolls to a legal face and reports it", async ({ page }) => {
@@ -62,11 +74,7 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
       ).not.toBeNull();
 
       expect(match[1]).toBe(kind);
-      const value = Number(match[2]);
-      expect(
-        LEGAL[kind].legal(value),
-        `${kind} rolled an illegal face: ${text}`,
-      ).toBe(true);
+      const label = match[2];
 
       // A landed roll must also offer the quote and the share affordance.
       await expect(page.locator(".hort-line")).not.toBeEmpty();
@@ -90,7 +98,14 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
         d.landedIndex,
         "stage recorded no landed face",
       ).toBeGreaterThanOrEqual(0);
-      expect(d.value, "stage value must match the rendered value").toBe(value);
+      expect(
+        LEGAL[kind].legal(d.value),
+        `${kind} rolled an illegal face: ${d.value} (rendered as ${JSON.stringify(text)})`,
+      ).toBe(true);
+      expect(
+        label,
+        "the rendered label must be the stage value put through formatFace",
+      ).toBe(rendered(kind, d.value));
       expect(
         upwardFaceIndex(d.normals, d.landedQuat, [0, 1, 0]),
         "reported face must be the world-up face at rest (invariant 2)",
