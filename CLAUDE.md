@@ -41,9 +41,11 @@ still *runs*, which is why they are written down.
 
 3. **The rest pose is the physics rest pose.** After settle, the mesh is frozen
    to the cannon-es body quaternion. The camera may dolly and the die may slide
-   to centre; its orientation may not be slerped to something camera-facing. A
-   post-settle snap is the single most tempting bug in this codebase and it
-   looks *almost* right, which is what makes it expensive.
+   to centre; its orientation may not be slerped to something camera-facing
+   *while the result is presented*. `abortRoll()` returns the die to the
+   upright idle pose only once the result is dismissed. A post-settle snap is
+   the single most tempting bug in this codebase and it looks *almost* right,
+   which is what makes it expensive.
 
 4. **A forced result is staged before the replay, never after the landing.**
    Reduced-motion and tests can force a value: simulate silently to rest, swap
@@ -54,9 +56,13 @@ still *runs*, which is why they are written down.
    (a d20's 1 is opposite its 20). Face-up rotation is baked into the texture
    layout, not corrected by a tween after the roll.
 
-6. **Cache-bust in lockstep.** `index.html` and every local import specifier
-   carry the same `?v=` token. Bump them together in one change, or the browser
-   serves you a new `app.js` against a stale `dice3d.js`.
+6. **Cache-bust the module chain in lockstep.** The tree carries three
+   independent `?v=` tokens. The *module chain* — `index.html`'s
+   `<script type="module">` plus every local import specifier in `app.js` and
+   `dice3d.js` — shares one token and must be bumped together whenever any
+   module changes, or the browser serves you a new `app.js` against a stale
+   `dice3d.js`. The stylesheet link and the media URLs in `app.js` carry their
+   own tokens; bump those only when those files change.
 
 7. **Never add a `build` script to `package.json`.** `vercel.json` pins
    framework, install and build to `null` and serves the repo root as-is.
@@ -67,8 +73,10 @@ still *runs*, which is why they are written down.
 > **Reveal camera (2026-08-22).** The physics port landed; the post-settle
 > yaw it carried was removed by the reveal camera —
 > `docs/superpowers/specs/2026-08-22-reveal-camera-design.md`. After the body
-> sleeps nothing writes `mesh.quaternion`; `revealCamera()` in
-> `physics-roll.js` places the camera instead. `e2e/roll.spec.js` asserts it.
+> sleeps nothing writes `mesh.quaternion` while a result is presented;
+> `abortRoll()` returns the die to the upright idle pose only once the result
+> is dismissed. `revealCamera()` in `physics-roll.js` places the camera
+> instead. `e2e/roll.spec.js` asserts it.
 
 ## Commands
 

@@ -289,14 +289,90 @@ approved and corrected here.
 - **§5 finish.** `sitOnTable()` is called with **no** quaternion argument in
   `finishRoll` and the reduced-motion path. Writing the correct quaternion is
   still a post-rest write, and it masked tail writes from the invariant-3
-  probe, which reads state after finish.
+  probe. *Superseded by the final-review wave below: the call is deleted
+  outright.*
 - **§5 resize.** A resize after the roll has finished re-derives the reveal
   for the new aspect and re-places the camera (`applyFraming`, guarded by
   `lastRoll?.reveal`). `lastRoll` is cleared in `abortRoll()`, which every
-  roll and every die/environment switch goes through.
+  roll and every die/environment switch goes through. *Extended by the
+  final-review wave below to cover a resize while the roll is still running.*
 - **§7 controls.** Two mutation controls, not one: a tail write and a hold
   write must each fail the invariant-3 assertion.
 - **§7 d100.** `e2e/roll.spec.js` modelled d100 as 1–100 from the pre-port
   `DICE` table; the port ships a 10-face percentile *tens* die (00–90). The
   test's model was corrected (per-die `legal()` predicate). Whether `00`
-  should read as 100 is a product question left to sub-spec 2.
+  should read as 100 is a product question left to sub-spec 2. The predicate
+  fix stands on its own: the quote and share assertions are **not** a safety
+  net for it, because `pickHortQuote` always returns a line, so `.hort-line`
+  can never be empty and an unquoted `00` face cannot surface that way.
+
+### Final-review wave (2026-08-23)
+
+- **§1 cache-bust — three tokens, not one.** The tree carries three
+  independent `?v=` tokens: the JS *module chain* (`index.html`'s
+  `<script type="module">` plus every local import in `app.js` and
+  `dice3d.js`), the stylesheet link, and the media URLs in `app.js`. Only the
+  module chain must move in lockstep, and it must move whenever any module
+  changes — the browser must never load a new `app.js` against a stale
+  `dice3d.js`. The stylesheet and media tokens are bumped only when those
+  files change; bumping the media token forces an ~8 MB re-download for no
+  reason. `CLAUDE.md` invariant 6 now says this.
+- **§3 the one blind spot in the invariant-3 gate.** `abortRoll()` →
+  `sitDefaultFace()` *does* write `mesh.quaternion` after the body has come to
+  rest, and the e2e probe cannot see it: `abortRoll()` clears `lastRoll`
+  before calling it, so `debug().landedQuat` is already `null` by the time the
+  write lands. This is deliberate and correct — the write happens only once
+  the result is dismissed, and invariant 3 governs the *presented* result —
+  but it is a structural gap in the probe, not something the probe checked and
+  passed. `CLAUDE.md` invariant 3 and the reveal-camera blockquote now carry
+  the qualifying clause.
+- **§5 flight — harmonised with `trackFlight`.** The `u <= 0` branch of the
+  replay path was a verbatim copy of `trackFlight(mesh)` except for the FOV
+  easing factor (0.22 here, 0.28 in the copy it replaced). It now calls
+  `trackFlight(mesh)`. The 0.22 easing is the deliberate resolution: the
+  replay flight and the live-physics flight now ease identically, which is
+  what §5's "Flight is unchanged" was reaching for.
+- **§5 finish — `sitOnTable()` deleted, not just de-argumented.** Both
+  argument-less `sitOnTable();` calls (in `finishRoll` and the reduced-motion
+  path) are gone. `lockSettleFrame(mesh, st.reveal)` follows each immediately
+  and already does everything they did — `freezeBody(mesh.quaternion,
+  mesh.position)` plus `updateBlob` — without the quaternion self-copy. The
+  only remaining `sitOnTable(` call site is `sitDefaultFace()`, the idle
+  placement, which is correct. Invariant 3 is now grep-provable in the roll
+  path.
+- **§5 resize — a resize during flight or the tail re-frames too.**
+  `applyFraming`'s recompute hook was guarded by `phase === "hold"`, so a
+  resize during flight left `st.reveal` at the old aspect's distance
+  (7.8 ↔ 8.8) for the rest of the roll, and the tail cached its target pose on
+  the first tail frame and never re-derived it. Both are fixed: the guard is
+  now `rollState?.reveal` (any phase in which a reveal exists), and the tail
+  caches only the *from* end (`tailCamPos` / `tailCamQuat` / `tailFov`) while
+  deriving the *to* end from `st.reveal` every frame. `revealPos` / `revealQuat`
+  are gone from `emptyRollState`. This was a regression against the base, where
+  `settleCam` was read live every frame.
+- **§7 the probe window is pinned.** Both `e2e/roll.spec.js` tests now
+  `await page.waitForFunction(() => window.__dice.debug().phase === "idle")`
+  before reading `debug()`, and assert `phase === "idle"` on the read. `#hort`
+  appears when `Promise.all([envPlay, diePlay])` resolves and `diePlay`
+  resolves at `beginHold`, not at finish; locally the environment film outlasts
+  the hold so the read landed post-finish, but CI runs ~2× slower and the film
+  length is wall-clock, so the read would have landed mid-hold. The pin makes
+  "the probe reads state after finish" true wherever this runs, and it is what
+  keeps the `sitOnTable()` deletion above under test.
+- **§7 the resize assertion is now discriminating.** `d.cam` and
+  `d.reveal.position` both come out of the same `applyFraming` call, so
+  comparing them only proves self-consistency — it catches "the camera drifted
+  off the reveal" but would pass on any finite garbage `computeReveal`
+  returned. An absolute check was added alongside it: after the portrait
+  resize, `|d.reveal.position − SETTLE_AIM|` must equal **8.8**.
+- **§4.2 `revealDistance()` derives its constants.** It returned a literal
+  `8.8 : 7.8` keyed on the same `aspect < 0.86` test that `applyFraming` uses
+  to set `idleCam.y` to `9.2 : 8.2`. It now returns `idleCam.y - SETTLE_AIM.y`
+  — identical by arithmetic, and it cannot drift. `applyFraming` always runs
+  before any `computeReveal` (the constructor calls `resize()`).
+- **§5 one reading of the reveal orientation.** `placeCamera` derived the
+  camera orientation via `camera.up` + `camera.lookAt` while the tail derived
+  it via `revealQuaternion` (`Matrix4.lookAt`). They agreed, but a check and an
+  action answering the same question is the class of thing that later diverges.
+  `placeCamera` now sets `camera.position` and `camera.up` and then calls
+  `revealQuaternion(reveal, camera.quaternion)`.

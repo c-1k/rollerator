@@ -11,7 +11,7 @@ add, rename or remove a file.
 | `index.html` | The entire DOM, the Three.js/cannon-es importmap, and the `?v=` cache-bust token. All element IDs the tests rely on live here. |
 | `app.js` | Wiring only. Reads the form, calls the dice stage, plays the environment film, renders the quote, drives the share button and the mute toggle. Holds no physics and no rendering. |
 | `dice3d.js` | The stage: geometry, procedural materials, camera, bloom postprocessing, the cannon-es world and the roll loop. The largest file in the repo and the one to read first for any dice behaviour. Exports `DICE`, `THEMES`, `createDiceStage`, `formatFace`. |
-| `physics-roll.js` | Pure maths lifted out of `dice3d.js` so it can be tested without a browser — face normals, opposite-face pairing, world-up face reading, easing, throw poses, and `revealCamera()` — where the camera goes to present a landed face. 31 exports, all covered by `physics-roll.test.js`. |
+| `physics-roll.js` | Pure maths lifted out of `dice3d.js` so it can be tested without a browser — face normals, opposite-face pairing, world-up face reading, easing, throw poses, and `revealCamera()` — where the camera goes to present a landed face. 32 exports, all covered by `physics-roll.test.js`. |
 | `roll-engine.js` | `rollFair()`, a rejection-sampled uniform draw over `crypto.getRandomValues`, plus `createRollController()` which invalidates an in-flight roll when a new one starts. |
 | `quotes.js` | Horticulture Williams' lines and their context, selected by die and value. |
 | `share-card.js` | Composes the shareable still from a stage snapshot; waits on the Cinzel webfonts before drawing. |
