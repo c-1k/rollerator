@@ -271,3 +271,32 @@ one-line table.
 - `grep -c restQuaternionForFace dice3d.js` is `0`.
 - `INDEX.md` and `CLAUDE.md` updated: the "In flight" note about the physics
   port is replaced with a pointer to this spec, and deferred gap 4 is struck.
+
+## 11. Amendments made during implementation (2026-08-22)
+
+Rulings recorded in the implementation ledger; the spec above is left as
+approved and corrected here.
+
+- **§4.2 distance.** `REVEAL_DISTANCE` is the eye-to-aim distance that
+  `revealCamera` consumes: `settleCam.y − SETTLE_AIM.y` = **7.8** landscape /
+  **8.8** portrait — not `settleCam.y` itself. `revealDistance()` returns these.
+- **§5 idle placement.** `restQuaternionForFace` had a third caller the spec
+  missed: `sitDefaultFace()`, the idle pose on load and on die/environment
+  switch. That placement precedes any roll and is not governed by invariant 3;
+  it now uses the existing pure `snapQuaternion(normal, texUp)` with the idle
+  view-up `(0,0,−1)`, and never reads `camera.up` (which varies with the
+  reveal after this change).
+- **§5 finish.** `sitOnTable()` is called with **no** quaternion argument in
+  `finishRoll` and the reduced-motion path. Writing the correct quaternion is
+  still a post-rest write, and it masked tail writes from the invariant-3
+  probe, which reads state after finish.
+- **§5 resize.** A resize after the roll has finished re-derives the reveal
+  for the new aspect and re-places the camera (`applyFraming`, guarded by
+  `lastRoll?.reveal`). `lastRoll` is cleared in `abortRoll()`, which every
+  roll and every die/environment switch goes through.
+- **§7 controls.** Two mutation controls, not one: a tail write and a hold
+  write must each fail the invariant-3 assertion.
+- **§7 d100.** `e2e/roll.spec.js` modelled d100 as 1–100 from the pre-port
+  `DICE` table; the port ships a 10-face percentile *tens* die (00–90). The
+  test's model was corrected (per-die `legal()` predicate). Whether `00`
+  should read as 100 is a product question left to sub-spec 2.

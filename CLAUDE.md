@@ -64,11 +64,11 @@ still *runs*, which is why they are written down.
    that has nothing to build. `package.json` is also listed in `.vercelignore`
    as a second line of defence.
 
-> **In flight (2026-08-22).** The physics port described in
-> `.grok/workflows/port-dice-physics.rhai` is what brings the committed code
-> into line with invariants 2–5. Until it lands, `main` still picks the value
-> up front and asks the die to land on it. Check `git log` before assuming
-> either state.
+> **Reveal camera (2026-08-22).** The physics port landed; the post-settle
+> yaw it carried was removed by the reveal camera —
+> `docs/superpowers/specs/2026-08-22-reveal-camera-design.md`. After the body
+> sleeps nothing writes `mesh.quaternion`; `revealCamera()` in
+> `physics-roll.js` places the camera instead. `e2e/roll.spec.js` asserts it.
 
 ## Commands
 
@@ -133,9 +133,6 @@ Stated plainly so nobody mistakes them for coverage:
 - **Pixel snapshots are skipped in CI.** Baselines are macOS-generated and CI
   renders on Linux. `e2e/chrome.spec.js` holds the structural line there;
   `e2e/snapshot.spec.js` explains how to enable both platforms.
-- **No test asserts the rendered face matches the reported one.** That needs a
-  small hook out of `dice3d.js` exposing the landed face, which is deferred
-  until the physics port settles. Until then, `pnpm shot` and your eyes.
 - **There is no `docs/architecture.md` yet.** Deliberately deferred: the roll
   pipeline is being rewritten, and a description of it written today would be
   wrong on arrival.

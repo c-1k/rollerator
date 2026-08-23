@@ -6,7 +6,7 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import * as CANNON from "cannon-es";
-import { createRollController } from "./roll-engine.js?v=cine-wide2";
+import { createRollController } from "./roll-engine.js?v=reveal-cam1";
 import {
   FACE_UV_YAW,
   FLIGHT_MAX_MS,
@@ -26,7 +26,7 @@ import {
   triangleMedianUp,
   uniqueVertsAndFaces,
   upwardFaceIndex,
-} from "./physics-roll.js?v=cine-wide2";
+} from "./physics-roll.js?v=reveal-cam1";
 
 const DIE_SCALE = 0.72;
 const TEX_BODY = 2048;
