@@ -82,9 +82,9 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
       await expect(page.locator("#roll")).toBeEnabled();
 
       // Pin the read to post-finish. #hort appears when Promise.all([envPlay,
-      // diePlay]) resolves, and diePlay resolves at beginHold, not at finish --
-      // on a slower machine that race lands the read mid-hold, which silently
-      // stops covering finishRoll and everything after it.
+      // diePlay]) resolves, and diePlay resolves at beginCrane, not at finish --
+      // on a slower machine that race lands the read mid-crane or mid-hold,
+      // which silently stops covering finishRoll and everything after it.
       await page.waitForFunction(
         () => window.__dice.debug().phase === "idle",
         null,
@@ -120,6 +120,39 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
         Math.abs(same),
         `die was re-oriented after rest (invariant 3): |q·q0| = ${Math.abs(same).toFixed(6)}`,
       ).toBeGreaterThan(1 - 1e-6);
+
+      // The throw itself (spec §8): a real throw, smooth, inside the tray.
+      expect(
+        d.flightMs,
+        `${kind} flight ${d.flightMs} ms`,
+      ).toBeGreaterThanOrEqual(400);
+      expect(d.flightMs, `${kind} flight ${d.flightMs} ms`).toBeLessThanOrEqual(
+        2000,
+      );
+      expect(d.bounces, `${kind} bounces ${d.bounces}`).toBeGreaterThanOrEqual(
+        1,
+      );
+      expect(d.bounces, `${kind} bounces ${d.bounces}`).toBeLessThanOrEqual(4);
+      expect(
+        d.heldFrames,
+        `${kind} held ${d.heldFrames} frames — the replay stuttered`,
+      ).toBe(0);
+      expect(
+        Math.abs(d.landedPos[0]),
+        `${kind} landed in the x wall`,
+      ).toBeLessThanOrEqual(1.72 - 0.3);
+      expect(
+        Math.abs(d.landedPos[2]),
+        `${kind} landed in the z wall`,
+      ).toBeLessThanOrEqual(1.62 - 0.3);
+      // The die is presented WHERE it landed — no slide. Compares the live mesh
+      // position to the recorded landing, so a re-introduced slide fails here.
+      for (let k = 0; k < 3; k++) {
+        expect(
+          Math.abs(d.meshPos[k] - d.landedPos[k]),
+          `${kind} was moved after landing (axis ${k})`,
+        ).toBeLessThan(1e-3);
+      }
     });
   }
 
@@ -138,7 +171,7 @@ test("switching environment clears the previous result; resizing keeps the revea
   await expect(page.locator("#hort")).toBeVisible({ timeout: 45_000 });
 
   // Invariant 4 is about a resize *after* the roll has come to rest, so pin the
-  // roll down first -- #hort can appear as early as beginHold on a slow machine.
+  // roll down first -- #hort can appear as early as beginCrane on a slow machine.
   await page.waitForFunction(
     () => window.__dice.debug().phase === "idle",
     null,
@@ -180,17 +213,18 @@ test("switching environment clears the previous result; resizing keeps the revea
     at2dp(d.cam),
     `camera must sit at the re-framed reveal, got ${JSON.stringify(d.cam)} vs ${JSON.stringify(revealAt)}`,
   ).toEqual(revealAt);
-  // Portrait reveal distance is idleCam.y - SETTLE_AIM.y = 9.2 - 0.4 = 8.8.
-  const aim = [0, 0.4, 0];
-  const aimDistance = Math.hypot(
-    d.reveal.position[0] - aim[0],
-    d.reveal.position[1] - aim[1],
-    d.reveal.position[2] - aim[2],
-  );
+  // The reveal aims at the landing, not the centre: eye-to-aim distance is
+  // the portrait idle height (9.2) above the rest height.
   expect(
-    aimDistance,
-    `portrait reveal must sit 8.8 from SETTLE_AIM, got ${aimDistance.toFixed(4)}`,
-  ).toBeCloseTo(8.8, 2);
+    d.landedPos,
+    "a presented result must carry where it landed",
+  ).not.toBeNull();
+  const dx = d.reveal.position[0] - d.landedPos[0];
+  const dy = d.reveal.position[1] - d.landedPos[1];
+  const dz = d.reveal.position[2] - d.landedPos[2];
+  expect(
+    Math.abs(Math.hypot(dx, dy, dz) - (9.2 - d.landedPos[1])),
+  ).toBeLessThan(1e-2);
   const same =
     d.meshQuat[0] * d.landedQuat[0] +
     d.meshQuat[1] * d.landedQuat[1] +

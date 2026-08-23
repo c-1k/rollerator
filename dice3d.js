@@ -982,7 +982,6 @@ export function createDiceStage(canvas, video) {
   // Reveal tilt off the vertical. Chosen 2026-08-22 from real renders at
   // 0 / 15 / 25 degrees; see the spec's decision record (section 8).
   const REVEAL_TILT = (15 * Math.PI) / 180;
-  const TAIL_MS = 1600;
   const camera = new THREE.PerspectiveCamera(IDLE_FOV, 1, 0.1, 80);
   const idleCam = new THREE.Vector3(0, 8.2, 0);
   const dropCam = new THREE.Vector3(0, 13.6, 0);
@@ -999,8 +998,6 @@ export function createDiceStage(canvas, video) {
   world.broadphase = new CANNON.SAPBroadphase(world);
   world.solver.iterations = 20;
   world.allowSleep = true;
-  world.defaultContactMaterial.friction = 0.42;
-  world.defaultContactMaterial.restitution = 0.34;
 
   const diceMat = new CANNON.Material("dice");
   const tableMat = new CANNON.Material("table");
@@ -1149,18 +1146,18 @@ export function createDiceStage(canvas, video) {
     idleCam.set(0, portrait ? 9.2 : 8.2, 0);
     dropCam.set(0, portrait ? 15.2 : 13.6, 0);
     if (rollState?.reveal) {
-      // Any phase, not just hold: the tail reads st.reveal every frame, so a
+      // Any phase, not just hold: the crane reads st.reveal every frame, so a
       // resize mid-flight has to re-derive it or the landing stays framed for
       // the old aspect for the rest of the roll.
-      rollState.reveal = computeReveal(rollState.mesh, rollState.index, rollState.landedQuat);
+      rollState.reveal = computeReveal(rollState.mesh, rollState.index, rollState.landedQuat, rollState.landedPos);
       if (lastRoll) lastRoll.reveal = rollState.reveal;
     }
     if (!rolling) {
-      if (lastRoll?.reveal && die) {
+      if (lastRoll?.reveal && lastRoll.landedPos && die) {
         // A result is still on the table. The die keeps its rest pose, so the
         // idle overhead shot would show the numeral crooked -- re-frame the
         // reveal for the new aspect instead.
-        lastRoll.reveal = computeReveal(die, lastRoll.index, lastRoll.landedQuat);
+        lastRoll.reveal = computeReveal(die, lastRoll.index, lastRoll.landedQuat, lastRoll.landedPos);
         placeCamera(lastRoll.reveal);
         setFov(PRESENT_FOV);
       } else {
@@ -1172,18 +1169,18 @@ export function createDiceStage(canvas, video) {
   }
 
   /** Eye-to-aim distance of the reveal: today's idle height above the aim point. */
-  function revealDistance() {
-    return idleCam.y - SETTLE_AIM.y;
+  function revealDistance(landedPos) {
+    return idleCam.y - landedPos[1];
   }
 
-  /** The camera pose that presents face `index` of a die resting at `landedQuat`. */
-  function computeReveal(mesh, index, landedQuat) {
+  /** The camera pose that presents face `index` of a die resting at `landedQuat`, at `landedPos`. */
+  function computeReveal(mesh, index, landedQuat, landedPos) {
     const t = mesh.userData.faceUps[index];
     const texUpWorld = rotateByQuat([t.x, t.y, t.z], landedQuat);
     return revealCamera(texUpWorld, {
       tilt: REVEAL_TILT,
-      distance: revealDistance(),
-      aim: [SETTLE_AIM.x, SETTLE_AIM.y, SETTLE_AIM.z],
+      distance: revealDistance(landedPos),
+      aim: landedPos,
     });
   }
 
@@ -1394,10 +1391,6 @@ export function createDiceStage(canvas, video) {
     heatedIndex = -1;
   }
 
-  function sitY(quat) {
-    return Math.max(0.08, restOffsetY(localVerts, [quat.x, quat.y, quat.z, quat.w], DIE_SCALE) - 0.02);
-  }
-
   function meshNormals(mesh) {
     return mesh.userData.normals.map((n) => [n.x, n.y, n.z]);
   }
@@ -1447,23 +1440,24 @@ export function createDiceStage(canvas, video) {
     st.value = landedValue(meshNormals(mesh), meshQuat(mesh), mesh.userData.values, [0, 1, 0]);
     st.label = formatFace(kind, st.value);
     st.landedQuat = meshQuat(mesh);
-    st.reveal = computeReveal(mesh, st.index, st.landedQuat);
     lastRoll = {
       index: st.index,
       value: st.value,
       landedQuat: st.landedQuat.slice(),
-      reveal: st.reveal,
+      reveal: null,
+      landedPos: null,
       flightMs: st.metrics?.flightMs ?? null,
       bounces: st.metrics?.bounces ?? null,
       wallHits: st.metrics?.wallHits ?? null,
       heldFrames: 0,
     };
-    if (!st.fromP) st.fromP = new THREE.Vector3();
-    if (!st.flatP) st.flatP = new THREE.Vector3();
-    if (!st.toP) st.toP = new THREE.Vector3();
-    st.fromP.copy(mesh.position);
-    st.flatP.set(0, settleY, 0);
-    st.toP.set(0, settleY, 0);
+    // Where the die came to rest, with the height for THIS pose (the old code
+    // reused the idle pose's settleY for every landing).
+    const restY = Math.max(0.08, restOffsetY(localVerts, st.landedQuat, DIE_SCALE) - 0.02);
+    st.landedPos = [mesh.position.x, restY, mesh.position.z];
+    st.reveal = computeReveal(mesh, st.index, st.landedQuat, st.landedPos);
+    lastRoll.landedPos = st.landedPos.slice();
+    lastRoll.reveal = st.reveal;
   }
 
   function freezeBody(quat, pos) {
@@ -1506,7 +1500,7 @@ export function createDiceStage(canvas, video) {
   function placeCamera(reveal) {
     camera.position.fromArray(reveal.position);
     camera.up.fromArray(reveal.up);
-    // One reading of the reveal orientation, shared with the tail slerp.
+    // One reading of the reveal orientation, shared with the crane slerp.
     revealQuaternion(reveal, camera.quaternion);
   }
 
@@ -1516,25 +1510,25 @@ export function createDiceStage(canvas, video) {
     camera.lookAt(tx, SETTLE_AIM.y, tz);
   }
 
-  function lockSettleFrame(mesh, reveal) {
-    mesh.position.set(0, settleY, 0);
+  /** Pin position and camera only -- the die keeps the pose physics left it in. */
+  function lockSettleFrame(mesh, rec) {
+    mesh.position.set(rec.landedPos[0], rec.landedPos[1], rec.landedPos[2]);
     freezeBody(mesh.quaternion, mesh.position);
-    placeCamera(reveal);
+    placeCamera(rec.reveal);
     setFov(PRESENT_FOV);
     updateBlob(mesh);
   }
 
   function finishLanding(st, now) {
     captureLanded(st);
-    beginHold(st, now);
+    beginCrane(st, now);
   }
 
   function finishRoll(st) {
     if (!st) return;
     const mesh = st.mesh;
     heatFace(mesh, st.index);
-    // Position and camera only -- the die keeps the pose physics left it in.
-    lockSettleFrame(mesh, st.reveal);
+    lockSettleFrame(mesh, st);
     st.finish(st.value);
   }
 
@@ -1564,14 +1558,24 @@ export function createDiceStage(canvas, video) {
     world.step(sim);
   }
 
+  /** The die is at rest. Freeze it where it is and crane the camera to it. */
+  function beginCrane(st, now) {
+    st.phase = "crane";
+    st.craneT0 = now;
+    st.craneFrom = { pos: camera.position.clone(), quat: camera.quaternion.clone(), fov: camera.fov };
+    st.mesh.position.set(st.landedPos[0], st.landedPos[1], st.landedPos[2]);
+    freezeBody(st.mesh.quaternion, st.mesh.position);
+    if (lastRoll) lastRoll.heldFrames = st.heldFrames;
+    // Report now so the quote lands as the camera arrives.
+    st.report?.(st.value);
+  }
+
   function beginHold(st, now) {
-    lockSettleFrame(st.mesh, st.reveal);
+    lockSettleFrame(st.mesh, st);
     st.phase = "hold";
     st.snapT0 = now;
     st.heated = true;
     heatFace(st.mesh, st.index);
-    st.report?.(st.value);
-    if (lastRoll) lastRoll.heldFrames = st.heldFrames;
   }
 
   function snapshotBody() {
@@ -1601,11 +1605,16 @@ export function createDiceStage(canvas, video) {
     dieBody.angularVelocity.set(snap.w.x, snap.w.y, snap.w.z);
   }
 
+  /** Seat mesh and body at one pose. The single place a replay pose is applied. */
+  function seatPose(mesh, p, q) {
+    mesh.position.set(p[0], p[1], p[2]);
+    mesh.quaternion.set(q[0], q[1], q[2], q[3]);
+    dieBody.position.set(p[0], p[1], p[2]);
+    dieBody.quaternion.set(q[0], q[1], q[2], q[3]);
+  }
+
   function applyFrame(mesh, f) {
-    mesh.position.set(f.p.x, f.p.y, f.p.z);
-    mesh.quaternion.set(f.q.x, f.q.y, f.q.z, f.q.w);
-    dieBody.position.set(f.p.x, f.p.y, f.p.z);
-    dieBody.quaternion.set(f.q.x, f.q.y, f.q.z, f.q.w);
+    seatPose(mesh, [f.p.x, f.p.y, f.p.z], [f.q.x, f.q.y, f.q.z, f.q.w]);
   }
 
   function applyThrow(mesh) {
@@ -1698,10 +1707,7 @@ export function createDiceStage(canvas, video) {
       st.replayI = i;
       const next = frames[Math.min(last, i + 1)];
       const pose = interpolateFrame(frames[i], next, exact - i);
-      mesh.position.set(pose.p[0], pose.p[1], pose.p[2]);
-      mesh.quaternion.set(pose.q[0], pose.q[1], pose.q[2], pose.q[3]);
-      dieBody.position.set(pose.p[0], pose.p[1], pose.p[2]);
-      dieBody.quaternion.set(pose.q[0], pose.q[1], pose.q[2], pose.q[3]);
+      seatPose(mesh, pose.p, pose.q);
       // "Vibration" detector: a render tick where the clock advanced but the
       // displayed pose did not change while frames remain.
       if (i < last && st.lastPose) {
@@ -1711,40 +1717,27 @@ export function createDiceStage(canvas, video) {
         if (same) st.heldFrames += 1;
       }
       st.lastPose = pose;
-      const span = Math.max(1, last - st.tailStart);
-      const u = i <= st.tailStart ? 0 : smoothProgress(i - st.tailStart, span);
-      if (u <= 0) {
-        // Still in flight: follow the die from overhead, exactly as the
-        // live-physics branch does.
-        trackFlight(mesh);
-      } else {
-        // Tail: the die slides to centre in its own pose; the camera eases
-        // from the follow shot into the reveal shot. Nothing here writes
-        // mesh.quaternion — applyFrame above already set it from the replay.
-        if (!st.tailCamPos) {
-          // The *from* end is cached once: it is where the follow shot was
-          // when the tail began, and it must not drift.
-          st.tailCamPos = camera.position.clone();
-          st.tailCamQuat = camera.quaternion.clone();
-          st.tailFov = camera.fov;
-        }
-        // The *to* end is re-derived every frame, so a resize mid-tail (which
-        // recomputes st.reveal) is picked up instead of being tweened past.
-        const toCamPos = scratchRevealPos.fromArray(st.reveal.position);
-        const toCamQuat = revealQuaternion(st.reveal, scratchRevealQuat);
-        st.fromP.set(frames[i].p.x, frames[i].p.y, frames[i].p.z);
-        mesh.position.lerpVectors(st.fromP, st.toP, u);
-        camera.position.lerpVectors(st.tailCamPos, toCamPos, u);
-        camera.quaternion.slerpQuaternions(st.tailCamQuat, toCamQuat, u);
-        setFov(st.tailFov + (PRESENT_FOV - st.tailFov) * u);
-        setFaceFocus(mesh, st.index, u);
-      }
       updateBlob(mesh);
-      if (i >= last) beginHold(st, now);
+      if (i >= last) beginCrane(st, now);
+      return;
+    }
+    if (st.phase === "crane") {
+      // The die is frozen at its landing; only the camera moves. The *to* end
+      // is re-derived every frame, so a resize mid-crane (which recomputes
+      // st.reveal) is picked up instead of being tweened past.
+      const u = smoothProgress(now - st.craneT0, CRANE_MS);
+      const toPos = scratchRevealPos.fromArray(st.reveal.position);
+      const toQuat = revealQuaternion(st.reveal, scratchRevealQuat);
+      camera.position.lerpVectors(st.craneFrom.pos, toPos, u);
+      camera.quaternion.slerpQuaternions(st.craneFrom.quat, toQuat, u);
+      setFov(st.craneFrom.fov + (PRESENT_FOV - st.craneFrom.fov) * u);
+      setFaceFocus(mesh, st.index, u);
+      updateBlob(mesh);
+      if (u >= 1) beginHold(st, now);
       return;
     }
     if (st.phase === "hold") {
-      lockSettleFrame(mesh, st.reveal);
+      lockSettleFrame(mesh, st);
       if (now - st.snapT0 >= HOLD_MS) finishRoll(st);
       return;
     }
@@ -1767,22 +1760,18 @@ export function createDiceStage(canvas, video) {
       value: null,
       label: "",
       landedQuat: null,
+      landedPos: null,
       reveal: null,
       t0: performance.now(),
       snapT0: 0,
-      fromP: new THREE.Vector3(),
-      flatP: new THREE.Vector3(),
-      toP: new THREE.Vector3(),
-      tailCamPos: null,
-      tailCamQuat: null,
-      tailFov: 0,
+      craneT0: 0,
+      craneFrom: null,
       replay: null,
       replayI: 0,
       replayT: 0,
       metrics: null,
       heldFrames: 0,
       lastPose: null,
-      tailStart: 0,
       heated: false,
       live: () => session.isLive() && die === mesh,
       report,
@@ -1823,8 +1812,7 @@ export function createDiceStage(canvas, video) {
         captureLanded(st);
         heatFace(mesh, st.index);
         camTween += 1;
-        // Position and camera only -- the die keeps the pose physics left it in.
-        lockSettleFrame(mesh, st.reveal);
+        lockSettleFrame(mesh, st);
         finish(st.value);
         return;
       }
@@ -1841,9 +1829,7 @@ export function createDiceStage(canvas, video) {
       restoreBody(origin);
       mesh.position.copy(dieBody.position);
       mesh.quaternion.copy(dieBody.quaternion);
-      const tailN = Math.min(replay.length - 1, Math.max(36, Math.round(TAIL_MS / 1000 / PHYS_STEP)));
       st.replay = replay;
-      st.tailStart = Math.max(0, replay.length - 1 - tailN);
       lookDown(dropCam);
       setFov(DROP_FOV);
       rollState = st;
@@ -1910,7 +1896,9 @@ export function createDiceStage(canvas, video) {
         landedIndex: lastRoll?.index ?? -1,
         landedQuat: lastRoll?.landedQuat ?? null,
         meshQuat: die ? meshQuat(die) : null,
+        meshPos: die ? [die.position.x, die.position.y, die.position.z] : null,
         normals: die ? meshNormals(die) : null,
+        landedPos: lastRoll?.landedPos ?? null,
         reveal: lastRoll?.reveal ?? null,
         flightMs: lastRoll?.flightMs ?? null,
         bounces: lastRoll?.bounces ?? null,
