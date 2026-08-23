@@ -125,13 +125,22 @@ form.addEventListener("submit", async (event) => {
     dice.setKind(kind, env);
     const envPlay = playEnv(env, { loop: false, muted: false });
     const diePlay = dice.roll();
-    const [, value] = await Promise.all([envPlay, diePlay]);
+    // The number is what the click was for, so it lands when the THROW is
+    // done -- dice.roll() resolves at crane start, so the quote arrives as the
+    // camera does. These used to be one `await Promise.all([envPlay, diePlay])`,
+    // which meant the result also waited on the environment film's `ended`:
+    // the films are 5-7s long, so a ~1s throw put the number on screen after
+    // six. The film now returns to its idle loop on its own clock.
+    envPlay.then(() => {
+      if (id !== actionId) return;
+      envFilm.loop = true;
+      envFilm.muted = true;
+      envFilm.play().catch(() => playEnv(env, { loop: true, muted: true }));
+      syncMuteButton();
+    });
+    const value = await diePlay;
     if (id !== actionId) return;
     if (value == null) return;
-    envFilm.loop = true;
-    envFilm.muted = true;
-    envFilm.play().catch(() => playEnv(env, { loop: true, muted: true }));
-    syncMuteButton();
     const hort = pickHortQuote(kind, value);
     hortRoll.textContent = `${kind}  ·  ${formatFace(kind, value)}`;
     hortLine.textContent = `“${hort.line}”`;
