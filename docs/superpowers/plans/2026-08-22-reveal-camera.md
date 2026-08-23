@@ -23,6 +23,7 @@ Copied from the spec and `CLAUDE.md`. Every task's requirements include these.
 - `dice3d.js`, `app.js`, `index.html`, `physics-roll*.js` are excluded from Biome while the physics port is in flight. Format them by hand to match surrounding code. Everything else must pass `pnpm lint`.
 - Line numbers in this plan are from the working tree at 2026-08-22 21:12. They will have shifted. **Anchor on function names**, and verify with `grep -n` before editing.
 - Pre-commit runs lint + unit tests. Do not bypass it with `--no-verify`.
+- **Stacked branch (decided 2026-08-22).** PR #3 (`feat/physics-port`) is HELD open because the port tripled cold-load time; sub-spec 2 must fix that before anything reaches `main`. This work branches from `feat/physics-port`, its PR targets `feat/physics-port`, and **nothing in this plan merges to `main` or deploys**.
 - Never `git checkout` in `/Users/camhome/dnd-sim`. Work in the worktree Task 0 creates.
 
 ---
@@ -34,25 +35,27 @@ This task produces no code. It proves you are standing on the right tree before 
 **Files:**
 - None modified.
 
-- [ ] **Step 1: Confirm the two prerequisites have happened**
+- [ ] **Step 1: Confirm the base branch**
 
 ```bash
 cd /Users/camhome/dnd-sim
 git fetch origin
-git log origin/main --oneline -5
+git log origin/feat/physics-port --oneline -4
+git log origin/main --oneline -3
 ```
 
-Expected: `main` contains (a) a commit landing Grok's physics port and (b) the squash of PR #1 `chore: kit the repo for agentic development`. If either is missing, **stop** — these are Cam's actions (see spec §1), not yours.
+Expected: `feat/physics-port` contains the port commit (`feat(dice): physics port — value read after sleep…`), the 120 s test-budget commit, and a merge of `main` that brought this plan and its spec onto the branch. `main` contains PR #1 (`chore: kit the repo…`) and PR #2 (`docs: reveal camera…`) but **not** the port — PR #3 is deliberately held open. If the port is on `main`, the world changed; re-read the Global Constraints before continuing.
 
 - [ ] **Step 2: Create the worktree**
 
 ```bash
 cd /Users/camhome/dnd-sim
-git pull origin main
-git worktree add .worktrees/reveal-camera -b feat/reveal-camera main
+git worktree add .worktrees/reveal-camera -b feat/reveal-camera origin/feat/physics-port
 cd .worktrees/reveal-camera
 pnpm install
 ```
+
+(On 2026-08-22 the orchestrator already ran this, plus Steps 3–5; if `.worktrees/reveal-camera` exists and `git -C .worktrees/reveal-camera log --oneline -1` shows `docs(plan): reveal camera stacks on feat/physics-port`, just `cd` into it and treat Task 0 as complete.)
 
 Expected: `pnpm install` prints `git config core.hooksPath .githooks` (the prepare script) and finishes without error.
 
@@ -846,23 +849,31 @@ git push -u origin feat/reveal-camera
 
 Expected: `exit: 0` before the commit.
 
-Open the PR with `gh pr create`. The body must include, verbatim from the logs:
+Open the PR **against the port branch**, not `main`:
+
+```bash
+gh pr create --base feat/physics-port --head feat/reveal-camera --title "feat(dice): reveal camera — the camera replaces the post-settle yaw"
+```
+
+The body must include, verbatim from the logs:
 - the Task 2 red line (`/tmp/task2-red.log`) — the assertion failing on the defect;
 - the Task 3 green summary (`/tmp/task3-green.log`);
 - the Task 5 mutation-control line (`/tmp/task5-mutation.log`) with its `|q·q0|` value;
 - the seven `pnpm shot` images attached or linked, with one sentence each on what you saw;
 - the sentence "`grep -c restQuaternionForFace dice3d.js` → 0".
 
-- [ ] **Step 5: Wait for CI, verify by content, merge**
+- [ ] **Step 5: Wait for CI, then merge into the port branch**
 
 ```bash
 gh run list --branch feat/reveal-camera --limit 1 --json status,conclusion,url
 ```
 
-Use `gh run list`, never `gh pr checks`. Merge only on `"conclusion":"success"`. After merge, confirm production is serving `?v=reveal-cam1`:
+Use `gh run list`, never `gh pr checks`. Merge only on `"conclusion":"success"`, and only into `feat/physics-port`:
 
 ```bash
-curl -s "https://rollerator.com/?cb=$(date +%s)" | grep -oE 'app\.js\?v=[a-z0-9-]+'
+gh pr merge --squash --admin
+git -C /Users/camhome/dnd-sim fetch origin
+git -C /Users/camhome/dnd-sim log origin/feat/physics-port --oneline -2
 ```
 
-Expected: `app.js?v=reveal-cam1`. Then `git worktree remove .worktrees/reveal-camera`.
+Expected: the squash commit sits on `feat/physics-port`; `origin/main` is unchanged. **Do not merge PR #3.** Production is checked when the whole stack lands after sub-spec 2, not here. Then `git worktree remove .worktrees/reveal-camera`.
