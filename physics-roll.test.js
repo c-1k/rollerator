@@ -13,6 +13,7 @@ import {
   landedValue,
   pairOppositeFaces,
   restOffsetY,
+  revealCamera,
   rotateAround,
   rotateByQuat,
   slowMoScale,
@@ -333,5 +334,96 @@ describe("smoothProgress", () => {
     almost(smoothProgress(0, 400), 0);
     almost(smoothProgress(400, 400), 1);
     almost(smoothProgress(200, 400), 0.5, 1e-4);
+  });
+});
+
+// --- revealCamera -----------------------------------------------------------
+
+function vsub(a, b) {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+function vdot(a, b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+function vcross(a, b) {
+  return [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ];
+}
+function vlen(v) {
+  return Math.hypot(v[0], v[1], v[2]);
+}
+function vnorm(v) {
+  const l = vlen(v) || 1;
+  return [v[0] / l, v[1] / l, v[2] / l];
+}
+
+/** Screen basis of a camera pose: forward, right, true screen-up. */
+function screenBasis(cam) {
+  const f = vnorm(vsub(cam.aim, cam.position));
+  const r = vnorm(vcross(f, cam.up));
+  const u = vcross(r, f);
+  return { f, r, u };
+}
+
+const TILT15 = (15 * Math.PI) / 180;
+const OPTS = { tilt: TILT15, distance: 8.2, aim: [0, 0.4, 0] };
+
+describe("revealCamera", () => {
+  it("places the camera so the numeral reads upright: +X, -Z, diagonal", () => {
+    for (const texUp of [[1, 0, 0], [0, 0, -1], vnorm([1, 0, -1])]) {
+      const cam = revealCamera(texUp, OPTS);
+      const { r, u } = screenBasis(cam);
+      assert.ok(vdot(texUp, u) > 0.9, `numeral-up ${texUp} is not screen-up`);
+      almost(vdot(texUp, r), 0, 1e-6);
+    }
+  });
+
+  it("puts the camera on the far side, so numeral-up points away from it", () => {
+    const texUp = [1, 0, 0];
+    const cam = revealCamera(texUp, OPTS);
+    const offset = vsub(cam.position, cam.aim);
+    assert.ok(vdot(offset, texUp) < 0, "camera should be behind the numeral");
+  });
+
+  it("honours distance and tilt", () => {
+    const cam = revealCamera([0, 0, -1], OPTS);
+    const offset = vsub(cam.position, cam.aim);
+    almost(vlen(offset), 8.2, 1e-6);
+    const fromVertical = Math.acos(vdot(vnorm(offset), [0, 1, 0]));
+    almost(fromVertical, TILT15, 1e-6);
+  });
+
+  it("tilt 0 is straight overhead and still has a defined screen basis", () => {
+    const cam = revealCamera([0, 0, -1], { ...OPTS, tilt: 0 });
+    almost(cam.position[0], 0);
+    almost(cam.position[1], 0.4 + 8.2);
+    almost(cam.position[2], 0);
+    const { r, u } = screenBasis(cam);
+    assert.ok(vlen(r) > 0.999, "right vector degenerate at tilt 0");
+    assert.ok(vdot([0, 0, -1], u) > 0.999, "screen-up should be -Z overhead");
+  });
+
+  it("up is the ground-plane screen-up, never world-up", () => {
+    const cam = revealCamera([1, 0, 0], OPTS);
+    almost(cam.up[1], 0, 1e-9);
+    almost(vlen(cam.up), 1, 1e-9);
+  });
+
+  it("falls back without NaN when numeral-up is vertical", () => {
+    const cam = revealCamera([0, 1, 1e-9], OPTS);
+    for (const k of ["position", "up", "aim"]) {
+      for (const x of cam[k]) assert.ok(Number.isFinite(x), `${k} has NaN`);
+    }
+    almost(cam.up[2], -1, 1e-6);
+  });
+
+  it("returns a copy of aim, not the caller's array", () => {
+    const aim = [0, 0.4, 0];
+    const cam = revealCamera([1, 0, 0], { ...OPTS, aim });
+    assert.notStrictEqual(cam.aim, aim);
+    assert.deepEqual(cam.aim, aim);
   });
 });

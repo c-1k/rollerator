@@ -1,17 +1,44 @@
 import { expect, test } from "@playwright/test";
+import { upwardFaceIndex } from "../physics-roll.js";
 
 /**
  * The load-bearing behavioural test.
  *
- * Every roll is commanded: app.js picks a fair value and asks the physics
- * to land on it. So the three ways this app breaks in the real world are
+ * The physics decides the number: the value is read from whichever face
+ * points at world-up after the body sleeps. So the ways this app breaks are
  *   1. the roll never terminates (physics never sleeps) -> caught by timeout
- *   2. the die reports a face outside its own range     -> caught by range
- *   3. something throws mid-flight                      -> caught by console
+ *   2. the die reports a face outside its own face set  -> caught by legal()
+ *   3. the reported value is not the world-up face      -> invariant 2 below
+ *   4. the die is re-oriented after it came to rest     -> invariant 3 below
+ *   5. something throws mid-flight                      -> caught by console
+ *   6. a resize after the roll un-frames the result     -> invariant 4 below
  * All seven dice share one page load; a cold start costs ~25s under
  * SwiftShader and a roll only ~10s.
  */
-const SIDES = { d4: 4, d6: 6, d8: 8, d10: 10, d12: 12, d20: 20, d100: 100 };
+// The legal face set of each die, in the STAGE's value space -- what
+// debug().value reports. d4..d20 are 1..sides. d100 is a percentile TENS die:
+// ten faces valued 0, 10, ... 90.
+const LEGAL = {
+  d4: { legal: (v) => v >= 1 && v <= 4 },
+  d6: { legal: (v) => v >= 1 && v <= 6 },
+  d8: { legal: (v) => v >= 1 && v <= 8 },
+  d10: { legal: (v) => v >= 1 && v <= 10 },
+  d12: { legal: (v) => v >= 1 && v <= 12 },
+  d20: { legal: (v) => v >= 1 && v <= 20 },
+  d100: { legal: (v) => v >= 0 && v <= 90 && v % 10 === 0 },
+};
+// The rendered label is NOT always String(value): this mirrors formatFace() in
+// dice3d.js, the two places they diverge. A d100 pads to two digits, and a
+// d10's 10 renders as the standard percentile "0" face. Asserting the label
+// against this, rather than assuming label === value, is what catches a
+// formatFace regression -- and is why d10 landing on 10 no longer reads as an
+// illegal face.
+const rendered = (kind, n) =>
+  kind === "d100"
+    ? String(n).padStart(2, "0")
+    : kind === "d10" && n === 10
+      ? "0"
+      : String(n);
 const HORT_ROLL = /^(d\d+)\s+·\s+(\d+)$/;
 
 test("every die rolls to a legal face and reports it", async ({ page }) => {
@@ -30,7 +57,7 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
   await expect(page.locator("#hort")).toBeHidden();
   await expect(page.locator("#share")).toBeHidden();
 
-  for (const [kind, sides] of Object.entries(SIDES)) {
+  for (const kind of Object.keys(LEGAL)) {
     await test.step(`${kind} lands`, async () => {
       // Changing the die runs setIdle(), which must clear the last result.
       await page.selectOption("#die", kind);
@@ -47,14 +74,52 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
       ).not.toBeNull();
 
       expect(match[1]).toBe(kind);
-      const value = Number(match[2]);
-      expect(value, `${kind} rolled below 1`).toBeGreaterThanOrEqual(1);
-      expect(value, `${kind} rolled above ${sides}`).toBeLessThanOrEqual(sides);
+      const label = match[2];
 
       // A landed roll must also offer the quote and the share affordance.
       await expect(page.locator(".hort-line")).not.toBeEmpty();
       await expect(page.locator("#share")).toBeVisible();
       await expect(page.locator("#roll")).toBeEnabled();
+
+      // Pin the read to post-finish. #hort appears when Promise.all([envPlay,
+      // diePlay]) resolves, and diePlay resolves at beginHold, not at finish --
+      // on a slower machine that race lands the read mid-hold, which silently
+      // stops covering finishRoll and everything after it.
+      await page.waitForFunction(
+        () => window.__dice.debug().phase === "idle",
+        null,
+        { timeout: 15_000 },
+      );
+
+      // Invariants 2 and 3, read from the stage itself rather than the DOM.
+      const d = await page.evaluate(() => window.__dice.debug());
+      expect(d.phase, "the invariant reads must land post-finish").toBe("idle");
+      expect(
+        d.landedIndex,
+        "stage recorded no landed face",
+      ).toBeGreaterThanOrEqual(0);
+      expect(
+        LEGAL[kind].legal(d.value),
+        `${kind} rolled an illegal face: ${d.value} (rendered as ${JSON.stringify(text)})`,
+      ).toBe(true);
+      expect(
+        label,
+        "the rendered label must be the stage value put through formatFace",
+      ).toBe(rendered(kind, d.value));
+      expect(
+        upwardFaceIndex(d.normals, d.landedQuat, [0, 1, 0]),
+        "reported face must be the world-up face at rest (invariant 2)",
+      ).toBe(d.landedIndex);
+      // q and -q are the same rotation, so compare by dot product.
+      const same =
+        d.meshQuat[0] * d.landedQuat[0] +
+        d.meshQuat[1] * d.landedQuat[1] +
+        d.meshQuat[2] * d.landedQuat[2] +
+        d.meshQuat[3] * d.landedQuat[3];
+      expect(
+        Math.abs(same),
+        `die was re-oriented after rest (invariant 3): |q·q0| = ${Math.abs(same).toFixed(6)}`,
+      ).toBeGreaterThan(1 - 1e-6);
     });
   }
 
@@ -63,12 +128,79 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
   );
 });
 
-test("switching environment clears the previous result", async ({ page }) => {
+test("switching environment clears the previous result; resizing keeps the reveal framed", async ({
+  page,
+}) => {
   await page.goto("/");
   await expect(page.locator("#roll")).toBeEnabled();
 
   await page.click("#roll");
   await expect(page.locator("#hort")).toBeVisible({ timeout: 45_000 });
+
+  // Invariant 4 is about a resize *after* the roll has come to rest, so pin the
+  // roll down first -- #hort can appear as early as beginHold on a slow machine.
+  await page.waitForFunction(
+    () => window.__dice.debug().phase === "idle",
+    null,
+    { timeout: 15_000 },
+  );
+
+  // Invariant 4: the result stays presented across a resize. The die keeps its
+  // physics rest pose, so the camera -- not the die -- has to re-frame for the
+  // new aspect, or the numeral goes crooked while the player is reading it.
+  await page.setViewportSize({ width: 800, height: 1000 }); // portrait
+  // The app re-frames on the window "resize" event; let it be dispatched and a
+  // frame be laid out before reading. This waits for the handler to have run,
+  // not for the assertion to pass.
+  await page.evaluate(
+    () =>
+      new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))),
+  );
+  await page.waitForFunction(
+    () => window.__dice.debug().phase === "idle",
+    null,
+    { timeout: 15_000 },
+  );
+  const d = await page.evaluate(() => window.__dice.debug());
+  expect(d.phase, "the invariant reads must land post-finish").toBe("idle");
+  expect(
+    d.reveal,
+    "a presented result must still carry its reveal",
+  ).not.toBeNull();
+  // Two checks, because they fail for different reasons: the self-consistency
+  // one catches "the camera drifted off the reveal"; the absolute one catches
+  // "the reveal itself is wrong", which the first cannot see because d.cam and
+  // d.reveal.position both come out of the same applyFraming call.
+  //
+  // debug() rounds cam to 2dp; round the reveal the same way. The "+ 0"
+  // normalises -0 to 0 so an exact compare cannot trip over the sign of zero.
+  const at2dp = (a) => a.map((n) => +n.toFixed(2) + 0);
+  const revealAt = at2dp(d.reveal.position);
+  expect(
+    at2dp(d.cam),
+    `camera must sit at the re-framed reveal, got ${JSON.stringify(d.cam)} vs ${JSON.stringify(revealAt)}`,
+  ).toEqual(revealAt);
+  // Portrait reveal distance is idleCam.y - SETTLE_AIM.y = 9.2 - 0.4 = 8.8.
+  const aim = [0, 0.4, 0];
+  const aimDistance = Math.hypot(
+    d.reveal.position[0] - aim[0],
+    d.reveal.position[1] - aim[1],
+    d.reveal.position[2] - aim[2],
+  );
+  expect(
+    aimDistance,
+    `portrait reveal must sit 8.8 from SETTLE_AIM, got ${aimDistance.toFixed(4)}`,
+  ).toBeCloseTo(8.8, 2);
+  const same =
+    d.meshQuat[0] * d.landedQuat[0] +
+    d.meshQuat[1] * d.landedQuat[1] +
+    d.meshQuat[2] * d.landedQuat[2] +
+    d.meshQuat[3] * d.landedQuat[3];
+  expect(
+    Math.abs(same),
+    `resize re-oriented the die (invariant 3): |q·q0| = ${Math.abs(same).toFixed(6)}`,
+  ).toBeGreaterThan(1 - 1e-6);
+  await page.setViewportSize({ width: 1280, height: 900 });
 
   await page.selectOption("#environment", "ice");
   await expect(page.locator("#hort")).toBeHidden();
