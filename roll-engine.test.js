@@ -13,11 +13,14 @@ describe("rollFair", () => {
   it("never returns a constant 20 on a d20", () => {
     const rolls = Array.from({ length: 200 }, () => rollFair(1, 20));
     const twenties = rolls.filter((n) => n === 20).length;
-    assert.equal(rolls.every((n) => n === 20), false);
+    assert.equal(
+      rolls.every((n) => n === 20),
+      false,
+    );
     assert.ok(twenties < 80, `too many 20s: ${twenties}/200`);
     assert.ok(
       rolls.every((n) => n >= 1 && n <= 20),
-      "d20 left its face range"
+      "d20 left its face range",
     );
   });
 
