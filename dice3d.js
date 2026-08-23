@@ -1148,9 +1148,18 @@ export function createDiceStage(canvas, video) {
       if (lastRoll) lastRoll.reveal = rollState.reveal;
     }
     if (!rolling) {
-      camera.fov = IDLE_FOV;
-      camera.updateProjectionMatrix();
-      lookDown(idleCam);
+      if (lastRoll?.reveal && die) {
+        // A result is still on the table. The die keeps its rest pose, so the
+        // idle overhead shot would show the numeral crooked -- re-frame the
+        // reveal for the new aspect instead.
+        lastRoll.reveal = computeReveal(die, lastRoll.index, lastRoll.landedQuat);
+        placeCamera(lastRoll.reveal);
+        setFov(PRESENT_FOV);
+      } else {
+        camera.fov = IDLE_FOV;
+        camera.updateProjectionMatrix();
+        lookDown(idleCam);
+      }
     }
   }
 
@@ -1284,6 +1293,9 @@ export function createDiceStage(canvas, video) {
     rolls.cancel();
     rolling = false;
     rollState = null;
+    // Whatever was on the table is no longer presented: roll() aborts before
+    // every throw, and setIdle() aborts on a die/environment change.
+    lastRoll = null;
     const done = settleRoll;
     settleRoll = null;
     if (die) {
@@ -1506,7 +1518,10 @@ export function createDiceStage(canvas, video) {
     if (!st) return;
     const mesh = st.mesh;
     heatFace(mesh, st.index);
-    sitOnTable(st.landedQuat);
+    // No quaternion argument: the die already carries its rest pose, and
+    // re-writing it -- even with the right value -- would mask a post-rest
+    // write from the invariant-3 probe.
+    sitOnTable();
     lockSettleFrame(mesh, st.reveal);
     st.finish(st.value);
   }
@@ -1727,7 +1742,6 @@ export function createDiceStage(canvas, video) {
 
   function roll(opts = {}) {
     abortRoll();
-    lastRoll = null;
     if (!die || !dieBody) return Promise.resolve(null);
     coolFaces(die);
     restoreSwappedFaces(die);
@@ -1759,7 +1773,10 @@ export function createDiceStage(canvas, video) {
         captureLanded(st);
         heatFace(mesh, st.index);
         camTween += 1;
-        sitOnTable(st.landedQuat);
+        // No quaternion argument: the die already carries its rest pose, and
+        // re-writing it -- even with the right value -- would mask a post-rest
+        // write from the invariant-3 probe.
+        sitOnTable();
         lockSettleFrame(mesh, st.reveal);
         finish(st.value);
         return;

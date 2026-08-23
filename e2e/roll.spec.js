@@ -11,6 +11,7 @@ import { upwardFaceIndex } from "../physics-roll.js";
  *   3. the reported value is not the world-up face      -> invariant 2 below
  *   4. the die is re-oriented after it came to rest     -> invariant 3 below
  *   5. something throws mid-flight                      -> caught by console
+ *   6. a resize after the roll un-frames the result     -> invariant 4 below
  * All seven dice share one page load; a cold start costs ~25s under
  * SwiftShader and a roll only ~10s.
  */
@@ -101,12 +102,49 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
   );
 });
 
-test("switching environment clears the previous result", async ({ page }) => {
+test("switching environment clears the previous result; resizing keeps the reveal framed", async ({
+  page,
+}) => {
   await page.goto("/");
   await expect(page.locator("#roll")).toBeEnabled();
 
   await page.click("#roll");
   await expect(page.locator("#hort")).toBeVisible({ timeout: 45_000 });
+
+  // Invariant 4: the result stays presented across a resize. The die keeps its
+  // physics rest pose, so the camera -- not the die -- has to re-frame for the
+  // new aspect, or the numeral goes crooked while the player is reading it.
+  await page.setViewportSize({ width: 800, height: 1000 }); // portrait
+  // The app re-frames on the window "resize" event; let it be dispatched and a
+  // frame be laid out before reading. This waits for the handler to have run,
+  // not for the assertion to pass.
+  await page.evaluate(
+    () =>
+      new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))),
+  );
+  const d = await page.evaluate(() => window.__dice.debug());
+  expect(
+    d.reveal,
+    "a presented result must still carry its reveal",
+  ).not.toBeNull();
+  // debug() rounds cam to 2dp; round the reveal the same way. The "+ 0"
+  // normalises -0 to 0 so an exact compare cannot trip over the sign of zero.
+  const at2dp = (a) => a.map((n) => +n.toFixed(2) + 0);
+  const revealPos = at2dp(d.reveal.position);
+  expect(
+    at2dp(d.cam),
+    `camera must sit at the re-framed reveal, got ${JSON.stringify(d.cam)} vs ${JSON.stringify(revealPos)}`,
+  ).toEqual(revealPos);
+  const same =
+    d.meshQuat[0] * d.landedQuat[0] +
+    d.meshQuat[1] * d.landedQuat[1] +
+    d.meshQuat[2] * d.landedQuat[2] +
+    d.meshQuat[3] * d.landedQuat[3];
+  expect(
+    Math.abs(same),
+    `resize re-oriented the die (invariant 3): |q·q0| = ${Math.abs(same).toFixed(6)}`,
+  ).toBeGreaterThan(1 - 1e-6);
+  await page.setViewportSize({ width: 1280, height: 900 });
 
   await page.selectOption("#environment", "ice");
   await expect(page.locator("#hort")).toBeHidden();
