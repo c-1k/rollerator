@@ -78,7 +78,7 @@ by θ, place the camera at azimuth −θ. Same picture, die untouched.
  * @param opts.tilt     radians off the vertical; 0 is straight overhead
  * @param opts.distance camera distance from aim
  * @param opts.aim      [x, y, z] the point the camera looks at
- * @returns { position: [x,y,z], up: [0,1,0], aim: [x,y,z] }
+ * @returns { position: [x,y,z], up: [x,y,z], aim: [x,y,z] }
  */
 export function revealCamera(texUpWorld, { tilt, distance, aim })
 ```
@@ -87,10 +87,14 @@ Derivation: project `texUpWorld` onto the ground plane and normalise to get
 the screen-up direction `s`. For the numeral to read upright, screen-up must
 point *away* from the camera in the ground plane, so the camera's horizontal
 offset from `aim` is `−s · distance · sin(tilt)` and its height is
-`aim.y + distance · cos(tilt)`. `up` is world-up. If `texUpWorld` is within
-1e-6 of vertical (face numeral-up has no ground component — cannot happen for a
-face that is itself world-up, but guard it) fall back to `s = (0, 0, −1)`, which
-reproduces today's overhead orientation.
+`aim.y + distance · cos(tilt)`. **`up` is `s` itself** — the ground-plane
+screen-up — not world-up. World-up is parallel to the view axis at tilt 0 and
+makes `lookAt` undefined there; `s` is never parallel to the view axis for any
+tilt below 90°, and for tilt > 0 it produces exactly the same screen-up as
+world-up would (both reduce to `(s·cos t, sin t)` after projection). If
+`texUpWorld` is within 1e-6 of vertical (cannot happen for a face that is
+itself world-up, but guard it) fall back to `s = (0, 0, −1)`, which is today's
+`camera.up` convention and reproduces the current overhead orientation.
 
 Tilt 0 degenerates to the current overhead shot exactly, so this function can
 be adopted before the tilt is turned on.
@@ -106,11 +110,15 @@ In `dice3d.js` alongside the existing camera constants:
 | `REVEAL_AIM` | `SETTLE_AIM` (`0, 0.4, 0`) | unchanged |
 | `PRESENT_FOV` | `44` | unchanged |
 
-### 4.3 Removed from `physics-roll.js`
+### 4.3 Dead imports removed from `dice3d.js`
 
-`snapQuaternion`, `ZOOM_MS`, `SLOWMO_AFTER_MS`, `SLOWMO_MIN` — zero callers in
-`dice3d.js`. Their tests go with them. `PRESENT_MS` and `SNAP_MS` are imported
-but unused; remove the imports, keep the exports for sub-spec 3 to decide.
+`PRESENT_MS`, `SNAP_MS` and `flightZoom` are imported by `dice3d.js` and never
+called there. The imports go. **Nothing is removed from `physics-roll.js`:**
+`ZOOM_MS`, `SLOWMO_AFTER_MS` and `SLOWMO_MIN` are used inside that file by
+`flightZoom` and `slowMoScale`, and `snapQuaternion` is a fixture for three
+unrelated tests in `physics-roll.test.js`. (An earlier draft of this section
+listed them for deletion on the strength of a grep that only covered
+`dice3d.js`. The grep defined the predicate; it was the wrong predicate.)
 
 ## 5. Choreography changes in `dice3d.js`
 
@@ -174,24 +182,28 @@ The result has fewer moving parts than the current tree, not more.
 
 ## 6. Observability
 
-The stage's `debug()` (already begun in the working tree) is completed and
-exposed as `window.__rollerator`:
+`app.js` already exposes the stage as `window.__dice`. Its `debug()` (already
+begun in the working tree) is completed:
 
 ```js
-{
+window.__dice.debug() → {
   phase,          // "idle" | "flight" | "hold"
-  value,          // reported value or null
-  landedIndex,    // face index read at sleep
-  landedQuat,     // [x,y,z,w] mesh quaternion at the moment of sleep
+  value,          // value of the LAST roll, or null
+  landedIndex,    // face index read at sleep, last roll
+  landedQuat,     // [x,y,z,w] mesh quaternion at the moment of sleep, last roll
   meshQuat,       // [x,y,z,w] mesh quaternion right now
   normals,        // number[][] local face normals for the current die
-  reveal,         // { position, up, aim } or null
+  reveal,         // { position, up, aim } for the last roll, or null
 }
 ```
 
-`landedQuat` is captured once, in `captureLanded`, and never overwritten for
-the life of the roll. `meshQuat` is read live. Their equality during hold is
-invariant 3, stated as data.
+The last-roll fields come from a `lastRoll` record written once in
+`captureLanded` and cleared only when the next roll starts — **not** from
+`rollState`, which is nulled when the hold ends ~1.6 s after the value is
+reported. A test that reads `rollState` races the hold timer; one that reads
+`lastRoll` does not. `meshQuat` is read live. Its equality with `landedQuat`
+— during hold *and* after finish, since `sitOnTable` is called with
+`landedQuat` — is invariant 3, stated as data.
 
 ## 7. Tests
 
@@ -207,9 +219,11 @@ invariant 3, stated as data.
 ### Browser — `e2e/roll.spec.js`
 A new step in the existing seven-dice test, after each `#hort` appears:
 
-1. Read `window.__rollerator`.
-2. `phase === "hold"`.
-3. `meshQuat` equals `landedQuat` component-wise within 1e-6 — **invariant 3**.
+1. Read `window.__dice.debug()`.
+2. `landedIndex >= 0` and `value` equals the number rendered in `.hort-roll`.
+3. `|meshQuat · landedQuat| > 1 − 1e-6` — the two quaternions describe the
+   same rotation (`q` and `−q` are the same rotation, so compare the dot
+   product, not components) — **invariant 3**.
 4. `upwardFaceIndex(normals, landedQuat, [0,1,0]) === landedIndex` and the
    value rendered in `.hort-roll` equals `value` — **invariant 2**, and the
    closure of deferred gap 4 ("nothing asserts the rendered face matches the
