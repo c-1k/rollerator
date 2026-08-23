@@ -14,10 +14,12 @@ import {
   GRAVITY_Y,
   HOLD_MS,
   THROW,
+  arenaPlanes,
   faceValueTable,
   interpolateFrame,
   isSleepy,
   landedValue,
+  reboundSpeed,
   restOffsetY,
   revealCamera,
   rotateAround,
@@ -1001,17 +1003,32 @@ export function createDiceStage(canvas, video) {
 
   const diceMat = new CANNON.Material("dice");
   const tableMat = new CANNON.Material("table");
+  // The ring gets its own material so it can be DEAD without softening the
+  // floor: the floor is where the throw's energy is meant to go.
+  const wallMat = new CANNON.Material("wall");
+  const dieContact = new CANNON.ContactMaterial(diceMat, tableMat, {
+    friction: THROW.contact.friction,
+    restitution: THROW.contact.restitution,
+    contactEquationStiffness: 4e6,
+    contactEquationRelaxation: 3,
+  });
+  world.addContactMaterial(dieContact);
   world.addContactMaterial(
-    new CANNON.ContactMaterial(diceMat, tableMat, {
-      friction: THROW.contact.friction,
-      restitution: THROW.contact.restitution,
+    new CANNON.ContactMaterial(diceMat, wallMat, {
+      friction: THROW.contact.wall.friction,
+      restitution: THROW.contact.wall.restitution,
       contactEquationStiffness: 4e6,
       contactEquationRelaxation: 3,
     })
   );
 
-  function addPlane(normal, x, y, z) {
-    const body = new CANNON.Body({ mass: 0, material: tableMat });
+  /** How bouncy THIS die is: its own override, or the profile's default. */
+  function restitutionFor(k) {
+    return THROW.contact.restitutionByKind?.[k] ?? THROW.contact.restitution;
+  }
+
+  function addPlane(normal, x, y, z, material = tableMat) {
+    const body = new CANNON.Body({ mass: 0, material });
     body.addShape(new CANNON.Plane());
     body.quaternion.setFromVectors(new CANNON.Vec3(0, 0, 1), new CANNON.Vec3(normal[0], normal[1], normal[2]));
     body.position.set(x, y, z);
@@ -1019,23 +1036,26 @@ export function createDiceStage(canvas, video) {
     return body;
   }
   const floorBody = addPlane([0, 1, 0], 0, 0, 0);
-  // The walls are invisible physics bounds, not scenery: the backdrop is a 2D
-  // film and the camera frames the die wherever it lands, so their size is a
-  // throw tunable and lives in THROW with the rest of them.
-  const wallBodies = [
-    addPlane([-1, 0, 0], THROW.tray.x, 0, 0),
-    addPlane([1, 0, 0], -THROW.tray.x, 0, 0),
-    addPlane([0, 0, -1], 0, 0, THROW.tray.z),
-    addPlane([0, 0, 1], 0, 0, -THROW.tray.z),
-  ];
-  addPlane([0, -1, 0], 0, 9.4, 0);
+  // The arena: an invisible cylinder, approximated by a ring of planes
+  // because cannon-es has no infinite cylinder. Not scenery -- the backdrop
+  // is a 2D film and the camera frames the die wherever it lands -- so its
+  // radius is a throw tunable and lives in THROW with the rest of them.
+  // A circle replaced the old four-walled tray because a corner returns a die
+  // twice and reads, over a backdrop with nothing drawn there, as a bounce
+  // off empty air.
+  const wallBodies = arenaPlanes(THROW.arena.radius, THROW.arena.planes).map((w) =>
+    addPlane(w.normal, w.position[0], w.position[1], w.position[2], wallMat)
+  );
+  // The lid. The authored first bounce peaks near y = 7.5; this is the
+  // backstop for a throw that somehow beats it, and it is dead like the ring.
+  addPlane([0, -1, 0], 0, 11.5, 0, wallMat);
 
-  // The shadow catcher. Not scenery: it does not have to reach the tray's
-  // corners, it has to be under the die wherever the die can STOP, plus the
-  // die's own 0.82 of shadow. At THROW.tray 3.0 x 2.8 that is 3.34 and this
-  // is 3.4. Grow it with the tray -- the arithmetic is in physics-roll.js.
+  // The shadow catcher. Not scenery: it does not have to reach the wall, it
+  // has to be under the die wherever the die can STOP, plus the die's own
+  // 0.82 of shadow. At THROW.arena.radius 3.9 that is 3.60 and this is 5.0.
+  // Grow it with the ring -- the arithmetic is in physics-roll.js.
   const catcher = new THREE.Mesh(
-    new THREE.CircleGeometry(3.4, 48),
+    new THREE.CircleGeometry(5.0, 64),
     new THREE.ShadowMaterial({ color: 0x000000, opacity: 0.42 })
   );
   catcher.rotation.x = -Math.PI / 2;
@@ -1107,6 +1127,13 @@ export function createDiceStage(canvas, video) {
   let die = null;
   let dieBody = null;
   let localVerts = [];
+  // One die-height, the unit the authored first bounce is measured in: the
+  // circumsphere DIAMETER of the body actually in the world (the hull verts,
+  // already scaled by DIE_SCALE). Chosen over the resting height because it
+  // is a property of the solid and not of the face it happens to land on --
+  // a tetrahedron's resting height is a third of a d20's for the same die.
+  // It runs 1.61 (d4) to 1.76 (d100), so "4 die-heights" is 6.4 to 7.0 units.
+  let dieHeight = 1.64;
   let kind = "d20";
   let envName = "siege";
   let rolling = false;
@@ -1260,6 +1287,9 @@ export function createDiceStage(canvas, video) {
       angularDamping: THROW.damping.angular,
     });
     dieBody.addShape(shape);
+    let far = 0;
+    for (const v of localVerts) far = Math.max(far, Math.hypot(v[0], v[1], v[2]));
+    dieHeight = far > 0 ? 2 * far * DIE_SCALE : 1.64;
     dieBody.ccdSpeedThreshold = 1.2;
     dieBody.ccdSweptSphereRadius = 0.28;
     world.addBody(dieBody);
@@ -1462,6 +1492,10 @@ export function createDiceStage(canvas, video) {
       bounces: st.metrics?.bounces ?? null,
       wallHits: st.metrics?.wallHits ?? null,
       apex: st.metrics?.apex ?? null,
+      apexHeights: st.metrics?.apexHeights ?? null,
+      dieHeight: st.metrics?.dieHeight ?? null,
+      kicked: st.metrics?.kicked ?? null,
+      __hits: st.metrics?.__hits ?? null,
       heldFrames: 0,
     };
     // Where the die came to rest, with the height for THIS pose (the old code
@@ -1662,12 +1696,34 @@ export function createDiceStage(canvas, video) {
   /**
    * Run the throw to rest without rendering, recording every physics step.
    * Also counts floor bounces and wall hits via the die's collide events,
-   * and measures the height of the first rebound; the listener is attached
-   * only for the duration of the sim.
+   * AUTHORS the first bounce, and measures how high that bounce went; the
+   * listener is attached only for the duration of the sim.
+   *
+   * The authored bounce is the one place physics is overruled, and it is
+   * overruled here rather than during playback on purpose: this is the
+   * simulation whose frames become the replay, so the die that lands is the
+   * die the viewer watched land. Determinism and invariant 2 are untouched --
+   * the face is still read off the body after it sleeps, from a trajectory
+   * that ran to rest before a single frame was drawn.
    */
   function simulateTrajectory() {
+    // Set here rather than at build time: `kind` changes without the world
+    // being rebuilt, and this is the only physics whose result is kept.
+    dieContact.restitution = restitutionFor(kind);
     const frames = [readFrame()];
-    const metrics = { flightMs: 0, bounces: 0, wallHits: 0, apex: 0 };
+    // The rebound the first floor impact is normalized to. `apexTarget` is
+    // what the die is AIMED at; `apex` is what it reached, and the two differ
+    // by whatever the die was still doing on the way up.
+    const apexTarget = THROW.firstBounceHeights * dieHeight;
+    const kickSpeed = reboundSpeed(apexTarget, THROW.gravityY);
+    const metrics = {
+      flightMs: 0,
+      bounces: 0,
+      wallHits: 0,
+      apex: 0,
+      apexHeights: 0,
+      dieHeight: +dieHeight.toFixed(3),
+    };
     let ms = 0;
     // One bounce is one IMPACT, not one contact point. A die landing flat puts
     // several contact equations on the floor in a single step and cannon-es
@@ -1687,6 +1743,18 @@ export function createDiceStage(canvas, video) {
     // height at contact) and `peakY` is the highest the centre gets after it.
     let bounceY = null;
     let peakY = 0;
+    // The kick is armed by the collide listener and fired after the step that
+    // owns it. cannon-es dispatches `collide` BEFORE the solver runs, so the
+    // velocity is still the pre-impact one there; by the time world.step()
+    // returns, restitution has been applied and the vertical component is the
+    // one to overwrite. Fired exactly once, and `kicked` is what proves it.
+    let kickArmed = false;
+    let kicked = false;
+    let kickMs = 0;
+    const HOLD = THROW.firstBounceHold;
+    // Open from the kick until the die first starts falling again, so `apex`
+    // is the height of THE FIRST bounce and not of whatever came later.
+    let apexOpen = false;
     const counted = (last) => ms !== last && ms - last >= BOUNCE_REFRACTORY_MS;
     const onCollide = (e) => {
       const speed = Math.abs(e.contact.getImpactVelocityAlongNormal());
@@ -1695,9 +1763,16 @@ export function createDiceStage(canvas, video) {
         if (!counted(lastFloorMs)) return;
         lastFloorMs = ms;
         metrics.bounces += 1;
+        (metrics.__hits ||= []).push([
+          Math.round(ms),
+          +speed.toFixed(1),
+          +Math.hypot(dieBody.position.x, dieBody.position.z).toFixed(2),
+          +Math.hypot(dieBody.velocity.x, dieBody.velocity.z).toFixed(1),
+        ]);
         if (bounceY === null) {
           bounceY = dieBody.position.y;
           peakY = bounceY;
+          kickArmed = true;
         }
       } else if (wallBodies.includes(e.body)) {
         if (!counted(lastWallMs)) return;
@@ -1710,8 +1785,42 @@ export function createDiceStage(canvas, video) {
       while (ms < FLIGHT_MAX_MS) {
         world.step(PHYS_STEP);
         ms += PHYS_STEP * 1000;
+        if (kickArmed) {
+          kickArmed = false;
+          kicked = true;
+          apexOpen = true;
+          kickMs = ms;
+        }
+        // The authored bounce, held for THROW.firstBounceHold.ms. Vertical is
+        // set to the ballistic value the target height needs and then defended
+        // against the grazing contacts a spinning die makes on its way up;
+        // horizontal and angular keep the DIRECTION the contact produced and
+        // lose only the magnitude the slam's friction impulse added. See the
+        // note in physics-roll.js for why each of the three exists.
+        if (kicked && ms - kickMs <= HOLD.ms) {
+          const t = (ms - kickMs) / 1000;
+          const want = kickSpeed - Math.abs(THROW.gravityY) * t;
+          const v = dieBody.velocity;
+          if (v.y < want) v.y = want;
+          const carry = Math.hypot(v.x, v.z);
+          if (carry > HOLD.carry) {
+            v.x = (v.x / carry) * HOLD.carry;
+            v.z = (v.z / carry) * HOLD.carry;
+          }
+          const w = dieBody.angularVelocity;
+          const spin = Math.hypot(w.x, w.y, w.z);
+          if (spin > HOLD.spin) {
+            const k = HOLD.spin / spin;
+            w.x *= k;
+            w.y *= k;
+            w.z *= k;
+          }
+        }
         frames.push(readFrame());
-        if (bounceY !== null && dieBody.position.y > peakY) peakY = dieBody.position.y;
+        if (apexOpen) {
+          if (dieBody.position.y > peakY) peakY = dieBody.position.y;
+          if (dieBody.velocity.y <= 0) apexOpen = false;
+        }
         if (isSleepy(frames[frames.length - 1].lin, frames[frames.length - 1].ang)) break;
       }
     } finally {
@@ -1721,6 +1830,8 @@ export function createDiceStage(canvas, video) {
     // and not a missing reading: a throw that never struck the floor hard
     // enough to count has failed the bounce bound already.
     metrics.apex = bounceY === null ? 0 : +Math.max(0, peakY - bounceY).toFixed(3);
+    metrics.apexHeights = +(metrics.apex / dieHeight).toFixed(3);
+    metrics.kicked = kicked;
     metrics.flightMs = Math.round(ms);
     frames.metrics = metrics;
     return frames;
@@ -1963,15 +2074,24 @@ export function createDiceStage(canvas, video) {
         meshPos: die ? [die.position.x, die.position.y, die.position.z] : null,
         normals: die ? meshNormals(die) : null,
         landedPos: lastRoll?.landedPos ?? null,
-        // Half-extents of the physics tray, so tests read the bounds the walls
-        // were actually built from instead of restating them as literals.
-        tray: { x: THROW.tray.x, z: THROW.tray.z },
+        // The containment, so tests read the bound the walls were actually
+        // built from instead of restating it as a literal. `radius` is the
+        // inscribed radius of the plane ring: a landing must keep
+        // hypot(x, z) inside radius minus the die and its margin.
+        arena: { radius: THROW.arena.radius, planes: THROW.arena.planes },
         reveal: lastRoll?.reveal ?? null,
         flightMs: lastRoll?.flightMs ?? null,
         bounces: lastRoll?.bounces ?? null,
         wallHits: lastRoll?.wallHits ?? null,
-        // How far the die rose off its first counted bounce, world units.
+        // How far the die rose off its first counted bounce, in world units
+        // and in die-heights. That bounce is authored, so `apexHeights` is
+        // the compliance number: it should sit on THROW.firstBounceHeights.
         apex: lastRoll?.apex ?? null,
+        apexHeights: lastRoll?.apexHeights ?? null,
+        dieHeight: lastRoll?.dieHeight ?? null,
+        // Whether the authored kick fired on this roll. Exactly once, always.
+        kicked: lastRoll?.kicked ?? null,
+        __hits: lastRoll?.__hits ?? null,
         heldFrames: lastRoll?.heldFrames ?? null,
         craneMs: CRANE_MS,
         holdMs: HOLD_MS,

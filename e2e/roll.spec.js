@@ -126,7 +126,7 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
         `die was re-oriented after rest (invariant 3): |q·q0| = ${Math.abs(same).toFixed(6)}`,
       ).toBeGreaterThan(1 - 1e-6);
 
-      // The throw itself (spec §8): a real throw, smooth, inside the tray.
+      // The throw itself (spec §8): a real throw, smooth, inside the arena.
       // This is a one-roll-per-die test, so each bound has to sit clear of the
       // distribution's TAIL, not of its median — the soak is what holds the
       // distribution. 300 rather than 400 because d4's tail reaches 367 ms:
@@ -138,40 +138,48 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
         `${kind} flight ${d.flightMs} ms`,
       ).toBeGreaterThanOrEqual(300);
       expect(d.flightMs, `${kind} flight ${d.flightMs} ms`).toBeLessThanOrEqual(
-        1800,
+        2000,
       );
       expect(d.bounces, `${kind} bounces ${d.bounces}`).toBeGreaterThanOrEqual(
         1,
       );
-      expect(d.bounces, `${kind} bounces ${d.bounces}`).toBeLessThanOrEqual(5);
-      // `apex` is how far the die rose off its first counted bounce. The
-      // FEEL bound on it (>= 0.35 in >= 80% of rolls) is the soak's, not
-      // this test's, and deliberately so: it is a property of a
-      // distribution, and the shipped profile does not meet it — see the
-      // Task 5 report. What is asserted here is that the number is real, so
-      // that dropping apex from the silent sim or from debug() fails a test
-      // instead of quietly scoring the soak's bound against undefined.
+      expect(d.bounces, `${kind} bounces ${d.bounces}`).toBeLessThanOrEqual(6);
+      // `apex` is how far the die rose off its first counted bounce, and
+      // `apexHeights` is that in die-heights. Unlike the other throw numbers
+      // this one is AUTHORED — the silent sim normalizes the first rebound to
+      // THROW.firstBounceHeights — so a single roll can be held to it
+      // directly rather than left to the soak's distribution. The band is
+      // wider here than the soak's (3.5–4.5) only because this is one roll a
+      // die and a rare contact-eaten kick should not turn the suite red.
       expect(
         typeof d.apex === "number" && Number.isFinite(d.apex),
         `${kind} reported no apex (${d.apex}) — the rebound-height metric is not wired`,
       ).toBe(true);
-      expect(d.apex, `${kind} apex ${d.apex}`).toBeGreaterThanOrEqual(0);
+      expect(d.kicked, `${kind} did not fire the authored first bounce`).toBe(
+        true,
+      );
+      expect(
+        d.apexHeights,
+        `${kind} first bounce ${d.apexHeights} die-heights (die ${d.dieHeight} u)`,
+      ).toBeGreaterThanOrEqual(3.2);
+      expect(
+        d.apexHeights,
+        `${kind} first bounce ${d.apexHeights} die-heights (die ${d.dieHeight} u)`,
+      ).toBeLessThanOrEqual(4.8);
       expect(
         d.heldFrames,
         `${kind} held ${d.heldFrames} frames — the replay stuttered`,
       ).toBe(0);
-      // Read the tray off the stage rather than restating it: the walls are
-      // built from THROW.tray, so a literal here would silently stop meaning
-      // "clear of the wall" the moment the tray is tuned. Clearance is the
-      // die's own radius plus a margin.
+      // Read the arena off the stage rather than restating it: the ring is
+      // built from THROW.arena, so a literal here would silently stop meaning
+      // "clear of the wall" the moment the arena is tuned. The containment is
+      // a cylinder now, so the bound is radial and there is only one of it.
+      // Clearance is the die's own radius plus a margin.
+      const landedR = Math.hypot(d.landedPos[0], d.landedPos[2]);
       expect(
-        Math.abs(d.landedPos[0]),
-        `${kind} landed in the x wall`,
-      ).toBeLessThanOrEqual(d.tray.x - (DIE_RADIUS + WALL_MARGIN));
-      expect(
-        Math.abs(d.landedPos[2]),
-        `${kind} landed in the z wall`,
-      ).toBeLessThanOrEqual(d.tray.z - (DIE_RADIUS + WALL_MARGIN));
+        landedR,
+        `${kind} landed ${landedR.toFixed(2)} out, inside the ring wall`,
+      ).toBeLessThanOrEqual(d.arena.radius - (DIE_RADIUS + WALL_MARGIN));
       // The die is presented WHERE it landed — no slide. Compares the live mesh
       // position to the recorded landing, so a re-introduced slide fails here.
       for (let k = 0; k < 3; k++) {

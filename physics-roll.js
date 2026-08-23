@@ -5,52 +5,147 @@
  * a SCALE FACTOR on geometry of circumradius 1.12-1.22, so the die's
  * circumradius is ~0.82 and it is ~1.6 units ACROSS.
  *
- * `tray` is the half-extent of the four invisible walls, which are physics
- * bounds and not scenery -- the backdrop is a 2D film and the camera frames
- * the die wherever it lands, so the tray's size is a throw tunable like any
- * other. It is the number the rest of the profile is derived from: every
- * launch draw must keep the WHOLE die inside it (|x| and z below
- * tray - 0.82), or the die spawns interpenetrating a wall and the solver
- * ejects it. That defect is what the 3.44 x 3.24 tray and z up to 1.4 used to
- * produce on most rolls.
+ * `arena` is the invisible containment: a ring of `planes` static planes,
+ * each tangent to the circle of `radius`, standing in for a cylinder that
+ * cannon-es cannot express. It replaced a rectangular tray on 2026-08-23,
+ * because a box has four corners and a die that reaches one pings off two
+ * walls at once in what looks, over a 2D backdrop with nothing drawn there,
+ * like a bounce off empty air. A circle has no corners and no preferred
+ * direction, and the walls it does have are DEAD (see `contact.wall`): a
+ * touch damps and redirects rather than rebounding.
  *
- * Two limits bound how far `tray` can grow, both checked at 3.0 x 2.8:
- *   - The flight camera (dropCam 13.6 up, DROP_FOV 54 vertical) sees +-6.93
- *     in z and +-9.86 in x, so the tray must stay inside that or a die can
- *     land off screen. There is room here for a tray half again this size.
- *   - The shadow-catcher disc has radius 3.4. It does not reach the tray's
- *     corners (hypot(3.0, 2.8) = 4.10), which is fine -- it is not scenery,
- *     it only has to be under the die wherever the die can STOP. Landing
- *     clearance (0.82 + 0.3) keeps the centre inside
- *     hypot(3.0 - 1.12, 2.8 - 1.12) = 2.52, and the shadow reaches the die's
- *     own 0.82 past that, so 3.34 is what must be covered: 0.06 to spare.
- *     Growing the tray means growing the disc with it.
+ * The arena is the number the rest of the profile is derived from:
+ *   - Spawn. Every launch draw must keep the WHOLE die inside the ring --
+ *     hypot(x, z) + 0.82 < radius -- or the die spawns interpenetrating a
+ *     wall and the solver ejects it at ~10 u/s.
+ *   - Landing. A die must come to rest with hypot(x, z) <= radius - 1.12
+ *     (its own 0.82 plus 0.3 of margin), which is the bound the soak and
+ *     e2e hold it to.
+ *
+ * Two limits bound how far `radius` can grow, both checked at 3.9:
+ *   - The flight camera (dropCam 13.6 up, DROP_FOV 54 vertical, 1280x900)
+ *     sees +-6.93 in z and +-9.86 in x, so the ring must stay inside that
+ *     or a die can land off screen. Nowhere near binding.
+ *   - The shadow-catcher disc (radius 5.0) has to be under the die wherever
+ *     the die can STOP, plus the die's own 0.82 of shadow: that is
+ *     3.9 - 1.12 + 0.82 = 3.60 against 5.0. It is not scenery and does not
+ *     have to reach the wall. Grow the disc with the ring.
+ *
+ * `firstBounceHeights` is the ONE authored number in the throw. Restitution
+ * cannot lift a die four of its own heights off a hand-height drop -- that
+ * needs e ~ 1.6 -- so the launch slams the die down at ~76-80 u/s and the
+ * silent simulation normalizes the vertical velocity of the FIRST counted
+ * floor impact to sqrt(2 * |gravityY| * heights * dieHeight). Everything
+ * after that impact is pure physics decaying at `contact.restitution`.
+ * Determinism is untouched: the kick happens inside the sim whose frames
+ * become the replay.
+ *
+ * `firstBounceHold` is what makes the kick survive the contact it fires out
+ * of, and it is not decoration -- without it the measured first bounce ran
+ * 1.9 to 4.1 die-heights instead of 4.0:
+ *   - `ms`. A die leaving the floor at 40 u/s while spinning at 17 rad/s
+ *     catches a corner on the way up, and the second contact eats a third of
+ *     the rebound. For this long after the kick the vertical velocity is held
+ *     at or above its ballistic value, so a graze cannot rob the leap. 55 ms
+ *     is ~2 units of rise: clear of anything the die can still touch.
+ *   - `carry` and `spin`. The impulse that turns 76 u/s of downward into
+ *     40 u/s of upward is enormous, and Coulomb friction lets a matching
+ *     TANGENTIAL impulse ride along with it -- measured as dice leaving the
+ *     bounce at 8-14 u/s sideways and landing outside the ring on most
+ *     throws. The direction the contact produced is kept; only the magnitude
+ *     is capped, and only for `ms`. This is the "clamp only if containment
+ *     breaks" the ruling allows, and containment broke.
  *
  * Values are the tuned result of the soak in the plan's Task 5.
  */
 export const THROW = {
   gravityY: -120,
-  physStep: 1 / 120,
+  // 1/240, not 1/120: the slam arrives at ~76-80 u/s, which is 0.66 units of
+  // travel per step at 1/120 against a die of circumradius 0.82. That is
+  // close enough to tunnelling for the first contact to land a step late,
+  // deep, and with a push-out impulse that reads as a stumble. Halving the
+  // step halves the travel; the replay interpolates between frames, so twice
+  // as many of them costs nothing on screen.
+  physStep: 1 / 240,
   flightMaxMs: 2500,
-  tray: { x: 3.0, z: 2.8 },
+  arena: { radius: 4.0, planes: 16 },
+  // The first bounce, in die-heights, where one die-height is the body's
+  // circumsphere diameter. Authored, not simulated -- see the note above.
+  firstBounceHeights: 4,
+  firstBounceHold: { ms: 55, carry: 2.6, spin: 22 },
   // A floor contact slower than this is the die settling, not striking, so it
   // is not a bounce. Scales with gravity: at -48 the old 0.8 was right; at
   // -120 the first impact is 12-15 u/s and 0.8 counts terminal rocking.
   bounceSpeed: 2.2,
   launch: {
     x: [-0.28, 0.28],
-    y: [1.5, 1.9],
+    y: [2.4, 2.8],
     z: [0.78, 0.98],
     vx: [-0.22, 0.22],
-    vy: [-0.6, -0.1],
-    vz: [-3.2, -2.6],
-    spin: [6, 4, 6],
+    // Downward, hard. This is the slam: ~70-76 u/s of throw on top of the
+    // fall, arriving at ~76-80. It buys no bounce height (that is authored)
+    // -- it buys the READ, a die driven at the table rather than dropped on
+    // it, and the friction impulse that comes with an impact that size.
+    vy: [-76, -70],
+    vz: [-2.8, -2.2],
+    // Fast enough to see turning in the first frames off the click. The old
+    // [6, 4, 6] was a tumble you had to look for.
+    spin: [17, 12, 17],
   },
-  contact: { friction: 1.15, restitution: 0.28 },
-  damping: { linear: 0.0, angular: 0.8 },
-  sleep: { speedLimit: 0.35, timeLimit: 0.25 },
+  // `restitution` governs every bounce AFTER the authored first one, so it is
+  // a decay rate now rather than a bounce-height lever: at 0.42 the chain
+  // goes 4 die-heights, then ~0.7, then ~0.12, and is done. `restitutionByKind`
+  // overrides it for a die that needs its own -- the seven solids do not
+  // shed energy alike, a tetrahedron landing on a big flat face dumps roughly
+  // twice as much as a d12. Spec section 10 excluded per-die profiles;
+  // amended by ruling 2026-08-23 for this one field.
+  //
+  // `wall` is the ring, and it is deliberately dead: a die that reaches the
+  // wall should be absorbed and turned back, not returned. Restitution 0.08
+  // and friction 2.0 means a wall touch costs the die most of what it had,
+  // which is what stops an invisible plane from reading as a ping off air.
+  contact: {
+    friction: 0.7,
+    restitution: 0.34,
+    restitutionByKind: {},
+    wall: { friction: 2.0, restitution: 0.08 },
+  },
+  damping: { linear: 0.0, angular: 0.86 },
+  sleep: { speedLimit: 0.7, timeLimit: 0.14 },
   rest: { lin: 0.002, ang: 0.006 },
 };
+
+/**
+ * The wall ring: `count` planes, each tangent to the circle of `radius`,
+ * inward normals pointing at the origin. cannon-es has no infinite cylinder
+ * and a plane is the one shape nothing tunnels through, so the cylinder is
+ * approximated by flats. The inscribed radius is exactly `radius`; the
+ * corners between planes bulge to radius / cos(PI / count), which at 16
+ * planes is 2% -- under the 0.3 of landing margin, so the bound the soak
+ * holds is honest against the worst-placed plane.
+ */
+export function arenaPlanes(radius, count) {
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const a = (i / count) * Math.PI * 2;
+    const ox = Math.cos(a);
+    const oz = Math.sin(a);
+    out.push({
+      // Inward: the die is on this side of the plane.
+      normal: [-ox, 0, -oz],
+      position: [radius * ox, 0, radius * oz],
+    });
+  }
+  return out;
+}
+
+/**
+ * The vertical speed a rebound needs to reach `height` under `gravityY`.
+ * The authored first bounce is this and nothing else: v = sqrt(2 g h).
+ */
+export function reboundSpeed(height, gravityY = THROW.gravityY) {
+  return Math.sqrt(2 * Math.abs(gravityY) * Math.max(0, height));
+}
 
 export const LIN_SLEEP = THROW.rest.lin;
 export const ANG_SLEEP = THROW.rest.ang;

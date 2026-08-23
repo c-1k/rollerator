@@ -11,9 +11,9 @@
  * the design spec (section 9), so tuning the profile is a measurement and
  * not a matter of opinion.
  *
- * It reads the tray half-extents off debug() rather than restating them,
- * because the walls are built from THROW.tray and a literal here would go on
- * reporting "clear of the wall" after the tray moved.
+ * It reads the arena radius off debug() rather than restating it, because
+ * the ring is built from THROW.arena and a literal here would go on
+ * reporting "clear of the wall" after the arena was resized.
  *
  *   node scripts/throw-soak.mjs            # 20 rolls per die, full mode
  *   node scripts/throw-soak.mjs 40 --fast  # 40 rolls per die, tuning mode
@@ -65,27 +65,28 @@ if (!Number.isInteger(N) || N < 1) {
 }
 
 /**
- * Spec section 9, as numbers, corrected 2026-08-23 for the real geometry.
- * The tray half-extents are NOT here: they are a THROW tunable, read off
- * debug().tray at run time so this script cannot disagree with the walls the
- * stage actually built. "Clear of a wall" is the die's own circumradius plus
- * a margin -- DIE_RADIUS is DIE_SCALE (0.72) times the largest geometry
- * circumradius (1.22), not 0.72, which is only the scale factor.
+ * The acceptance, as numbers. Amended by the ruling of 2026-08-23 (the
+ * cylinder-and-slam pass), which supersedes spec section 9's older bands.
+ * The arena radius is NOT here: it is a THROW tunable, read off debug().arena
+ * at run time so this script cannot disagree with the ring the stage actually
+ * built. "Clear of a wall" is the die's own circumradius plus a margin --
+ * DIE_RADIUS is DIE_SCALE (0.72) times the largest geometry circumradius
+ * (1.22), not 0.72, which is only the scale factor.
  */
 const BOUNDS = {
-  medianFlightMs: [450, 1300],
-  p95FlightMs: 1800,
-  bounces: [1, 5],
+  // The first hop alone costs ~0.65 s, so the band moved up; the p95 and the
+  // click-to-number ceiling are what stop the tail from spending it twice.
+  medianFlightMs: [450, 1600],
+  p95FlightMs: 1900,
+  bounces: [1, 6],
   bounceShare: 0.9,
-  // How far the die must rise off its first counted bounce, in world units
-  // against a die ~1.6 across, and how often. The bounce COUNT cannot tell a
-  // hop from a shudder: a profile scoring 100% on the count still read as
-  // drop-tumble-settle because its rebounds were 0.21 units, 13% of a die.
-  // 0.35 is a bit over a fifth of the die's width -- visible at the flight
-  // camera's height. Not every roll: a die that lands flat on its last legs
-  // legitimately does not rebound, so this is a share like the others.
-  apex: 0.35,
-  apexShare: 0.8,
+  // The first bounce is AUTHORED at THROW.firstBounceHeights die-heights, so
+  // this is a compliance band and not a feel bound: it says the kick fired,
+  // fired once, and was not eaten by the contact it fired out of. Tight, in
+  // both directions -- too high means a double kick or a solver push-out
+  // riding along, too low means the die was still in contact and lost it.
+  apexHeights: [3.5, 4.5],
+  apexShare: 0.9,
   wallHits: 1,
   wallHitShare: 0.8,
   heldFrames: 0,
@@ -165,6 +166,9 @@ function fastBatch(n) {
       bounces: d.bounces,
       wallHits: d.wallHits,
       apex: d.apex,
+      apexHeights: d.apexHeights,
+      dieHeight: d.dieHeight,
+      kicked: d.kicked,
       landedPos: d.landedPos,
     });
     window.__dice.abortRoll();
@@ -198,25 +202,24 @@ try {
   await page.selectOption("#environment", ENV);
   await page.waitForTimeout(3000);
 
-  // The walls are built from THROW.tray, so ask the stage what they are
-  // rather than restating them here where the two could drift apart.
-  const tray = await page.evaluate(() => window.__dice.debug().tray);
-  if (!tray) {
+  // The ring is built from THROW.arena, so ask the stage what it is rather
+  // than restating it here where the two could drift apart.
+  const arena = await page.evaluate(() => window.__dice.debug().arena);
+  if (!arena) {
     throw new Error(
-      "debug() reported no tray -- this build predates the tray tunable, " +
-        "and the landing bounds below would be measured against nothing.",
+      "debug() reported no arena -- this build predates the cylinder, " +
+        "and the landing bound below would be measured against nothing.",
     );
   }
-  const clearX = tray.x - (BOUNDS.dieRadius + BOUNDS.wallMargin);
-  const clearZ = tray.z - (BOUNDS.dieRadius + BOUNDS.wallMargin);
+  const clearR = arena.radius - (BOUNDS.dieRadius + BOUNDS.wallMargin);
 
   console.log(
     `\n  throw soak: ${N} rolls x ${DICE.length} dice in "${ENV}"` +
       `${FAST ? "  [--fast]" : ""}`,
   );
   console.log(
-    `  tray ±${tray.x} x ±${tray.z}; a landing must stay inside ` +
-      `±${round(clearX)} x ±${round(clearZ)} (die radius ` +
+    `  arena radius ${arena.radius} (${arena.planes} planes); a landing must ` +
+      `stay inside hypot(x, z) <= ${round(clearR)} (die radius ` +
       `${BOUNDS.dieRadius} + ${BOUNDS.wallMargin} margin)`,
   );
   if (FAST) {
@@ -259,11 +262,22 @@ try {
           "Reduced motion takes a different path and records no metrics.",
       );
     }
-    if (samples.some((s) => s.apex == null)) {
+    if (samples.some((s) => s.apexHeights == null)) {
       throw new Error(
-        `${kind}: debug() reported no apex -- this build predates the ` +
-          "rebound-height metric, so the apex bound below would score 0% " +
-          "against nothing rather than against a measured throw.",
+        `${kind}: debug() reported no apexHeights -- this build predates the ` +
+          "authored first bounce, so the compliance bound below would score " +
+          "0% against nothing rather than against a measured throw.",
+      );
+    }
+    // The kick is the one authored thing in the throw. If it did not fire,
+    // every apex number below is measuring plain restitution and the run is
+    // certifying the wrong physics.
+    const unkicked = samples.filter((s) => s.kicked !== true).length;
+    if (unkicked) {
+      throw new Error(
+        `${kind}: the authored first bounce did not fire on ${unkicked} of ` +
+          `${samples.length} rolls (debug().kicked). The apex numbers below ` +
+          "would be measuring restitution, not the kick.",
       );
     }
 
@@ -299,10 +313,12 @@ try {
     const flights = samples.map((s) => s.flightMs);
     const bounces = samples.map((s) => s.bounces);
     const walls = samples.map((s) => s.wallHits);
-    const apexes = samples.map((s) => s.apex);
+    const apexes = samples.map((s) => s.apexHeights);
     const held = FAST ? [] : samples.map((s) => s.heldFrames);
-    const maxX = Math.max(...samples.map((s) => Math.abs(s.landedPos[0])));
-    const maxZ = Math.max(...samples.map((s) => Math.abs(s.landedPos[2])));
+    const radii = samples.map((s) =>
+      Math.hypot(s.landedPos[0], s.landedPos[2]),
+    );
+    const maxR = Math.max(...radii);
     const inRange = bounces.filter(
       (b) => b >= BOUNDS.bounces[0] && b <= BOUNDS.bounces[1],
     ).length;
@@ -315,15 +331,19 @@ try {
       hi: Math.max(...flights),
       bounceHist: histogram(bounces),
       bounceShare: inRange / bounces.length,
+      dieHeight: samples[0].dieHeight,
       apexMed: median(apexes),
       apexMin: Math.min(...apexes),
-      apexShare: apexes.filter((a) => a >= BOUNDS.apex).length / apexes.length,
+      apexMax: Math.max(...apexes),
+      apexShare:
+        apexes.filter(
+          (a) => a >= BOUNDS.apexHeights[0] && a <= BOUNDS.apexHeights[1],
+        ).length / apexes.length,
       wallMean: mean(walls),
       wallQuietShare:
         walls.filter((w) => w <= BOUNDS.wallHits).length / walls.length,
       heldMax: FAST ? null : Math.max(...held),
-      maxX,
-      maxZ,
+      maxR,
       toCrane,
       toNumber,
     };
@@ -348,9 +368,10 @@ try {
       );
     if (row.apexShare < BOUNDS.apexShare)
       fail(
-        `apex >= ${BOUNDS.apex} in only ${round(row.apexShare * 100, 0)}% ` +
-          `(need ${BOUNDS.apexShare * 100}%) -- median rise ` +
-          `${round(row.apexMed)}: it drops and tumbles, it does not bounce`,
+        `first bounce in ${BOUNDS.apexHeights[0]}-${BOUNDS.apexHeights[1]} ` +
+          `die-heights in only ${round(row.apexShare * 100, 0)}% (need ` +
+          `${BOUNDS.apexShare * 100}%) -- median ${round(row.apexMed)}, ` +
+          `range ${round(row.apexMin)}-${round(row.apexMax)}`,
       );
     if (row.wallQuietShare < BOUNDS.wallHitShare)
       fail(
@@ -360,10 +381,8 @@ try {
       );
     if (!FAST && row.heldMax > BOUNDS.heldFrames)
       fail(`heldFrames max ${row.heldMax} -- the replay stuttered`);
-    if (maxX > clearX)
-      fail(`landed ${round(maxX - clearX)} past the x landing bound`);
-    if (maxZ > clearZ)
-      fail(`landed ${round(maxZ - clearZ)} past the z landing bound`);
+    if (maxR > clearR)
+      fail(`landed ${round(maxR - clearR)} past the radial landing bound`);
     // The raw wall clock, and nothing else. It used to need correcting for
     // renderer speed because the replay advanced by tick's clamped dt and so
     // ran slow on a slow renderer; the replay now reads the wall clock
@@ -382,12 +401,14 @@ try {
         `  <=${BOUNDS.wallHits} in ${round(row.wallQuietShare * 100, 0)}%`,
     );
     console.log(
-      `       apex      med ${String(round(row.apexMed)).padStart(5)}` +
+      `       bounce 1  med ${String(round(row.apexMed)).padStart(5)}` +
         `  min ${String(round(row.apexMin)).padStart(5)}` +
-        `  >=${BOUNDS.apex} in ${round(row.apexShare * 100, 0)}%`,
+        `  max ${String(round(row.apexMax)).padStart(5)} die-heights` +
+        `  (die ${round(row.dieHeight)} u)  in-band ` +
+        `${round(row.apexShare * 100, 0)}%`,
     );
     console.log(
-      `       landing   max|x| ${round(maxX)}  max|z| ${round(maxZ)}` +
+      `       landing   max radius ${round(maxR)} of ${round(clearR)}` +
         `   heldFrames max ${FAST ? "n/a" : row.heldMax}`,
     );
     if (!FAST)

@@ -191,10 +191,10 @@ try {
 
   /**
    * Copy `n` frames off the live canvas, spaced across the flight, then
-   * encode them once the die is down. Returns crops around the tray: the
+   * encode them once the die is down. Returns crops around the arena: the
    * flight camera is 13.6 units up at a 54 degree vertical field of view, so
    * it sees 13.9 units of height and a full frame is mostly backdrop. Half of
-   * that is 6.9 units, which covers the 6.0 x 5.6 tray with margin.
+   * that is 6.9 units, which covers the 7.8-unit-wide arena with margin.
    */
   const captured = await page.evaluate(async (n) => {
     const canvas = document.querySelector("#die-stage");

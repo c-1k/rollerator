@@ -8,6 +8,7 @@ import {
   LIN_SLEEP,
   THROW,
   adjacentFaces,
+  arenaPlanes,
   assignPolyhedronValues,
   faceValueTable,
   icosahedronFaceNormals,
@@ -16,6 +17,7 @@ import {
   landedValue,
   pairOppositeFaces,
   quatSlerp,
+  reboundSpeed,
   restOffsetY,
   revealCamera,
   rotateAround,
@@ -102,7 +104,7 @@ describe("uniqueVertsAndFaces", () => {
 });
 
 describe("throwPose", () => {
-  it("throws from hand height with downward speed, into the tray, and with spin", () => {
+  it("throws from hand height with downward speed, into the arena, and with spin", () => {
     let i = 0;
     const seq = [0.2, 0.8, 0.3, 0.4, 0.6, 0.1, 0.9, 0.25, 0.75, 0.5, 0.5, 0.5];
     const rng = () => seq[i++ % seq.length];
@@ -110,6 +112,7 @@ describe("throwPose", () => {
     assert.ok(pose.position[1] < 3, `start y ${pose.position[1]}`);
     assert.ok(pose.velocity[1] < 0, `vy should fall, got ${pose.velocity[1]}`);
     assert.ok(pose.velocity[2] < 0, `vz should be toward -Z, got ${pose.velocity[2]}`);
+    assert.ok(pose.velocity[1] < -40, `the slam drives the die down, got ${pose.velocity[1]}`);
     assert.equal(pose.angularVelocity.length, 3);
     assert.ok(pose.angularVelocity.some((v) => Math.abs(v) > 1));
   });
@@ -420,6 +423,79 @@ describe("revealCamera", () => {
   });
 });
 
+describe("arenaPlanes", () => {
+  it("makes `count` planes, every one tangent to the circle of `radius`", () => {
+    const planes = arenaPlanes(3.9, 16);
+    assert.equal(planes.length, 16);
+    for (const { normal, position } of planes) {
+      almost(Math.hypot(position[0], position[1], position[2]), 3.9, 1e-9);
+      almost(Math.hypot(...normal), 1, 1e-9);
+      assert.equal(normal[1], 0, "the ring is vertical");
+      assert.equal(position[1], 0, "the ring stands on the floor");
+    }
+  });
+
+  it("every normal points at the origin, so the die is inside", () => {
+    for (const { normal, position } of arenaPlanes(3.2, 12)) {
+      // Inward means the vector from the plane to the origin agrees with it.
+      const toCentre = [-position[0], -position[1], -position[2]];
+      const d =
+        normal[0] * toCentre[0] + normal[1] * toCentre[1] + normal[2] * toCentre[2];
+      assert.ok(d > 0, `normal ${normal} faces away from the centre`);
+    }
+  });
+
+  it("holds every landing the bound allows, and none the ring should not", () => {
+    const R = 3.9;
+    const planes = arenaPlanes(R, 16);
+    // Clearance of a point from the ring: how far inside the nearest plane it
+    // sits, along that plane's inward normal. Positive is contained.
+    const clearance = (px, pz) =>
+      Math.min(
+        ...planes.map(
+          ({ normal, position }) =>
+            normal[0] * (px - position[0]) + normal[2] * (pz - position[2]),
+        ),
+      );
+    // How far a point on the inscribed circle can sit inside the nearest
+    // flat: R(1 - cos(pi / count)), the chord's sagitta.
+    const slack = R * (1 - Math.cos(Math.PI / 16));
+    for (let a = 0; a < Math.PI * 2; a += 0.05) {
+      // The landing bound: the die's 0.82 plus 0.3 of margin, inside the ring.
+      const bound = R - 1.12;
+      assert.ok(
+        clearance(bound * Math.cos(a), bound * Math.sin(a)) > 0.82,
+        `a die landing at radius ${bound}, angle ${a}, must clear the ring`,
+      );
+      // At the inscribed radius the ring is on top of the die: it never cuts
+      // inside R (clearance never goes negative), and it never lets a point
+      // there be more than the flats' own slack inside it either.
+      const c = clearance(R * Math.cos(a), R * Math.sin(a));
+      assert.ok(c >= -1e-9, `the ring cuts inside its own radius at ${a}: ${c}`);
+      assert.ok(c <= slack + 1e-9, `the ring bulges ${c} at ${a}, past ${slack}`);
+    }
+    // The flats bulge outward between planes. That slack has to stay under
+    // the landing margin or the bound stops being honest about the worst
+    // angle, which is the corner between two planes.
+    assert.ok(slack < 0.3, `corner slack ${slack} must stay under the margin`);
+  });
+});
+
+describe("reboundSpeed", () => {
+  it("is sqrt(2 g h) and round-trips through the ballistic rise", () => {
+    const g = 120;
+    for (const h of [0.5, 1.64, 6.56]) {
+      const v = reboundSpeed(h, -g);
+      almost(v, Math.sqrt(2 * g * h), 1e-9);
+      almost((v * v) / (2 * g), h, 1e-9);
+    }
+  });
+
+  it("clamps a negative height to a standstill rather than returning NaN", () => {
+    assert.equal(reboundSpeed(-1, -120), 0);
+  });
+});
+
 describe("THROW profile", () => {
   const inRange = (v, [lo, hi]) => v >= lo && v <= hi;
 
@@ -441,11 +517,11 @@ describe("THROW profile", () => {
     for (let i = 0; i < 200; i++) {
       const p = throwPose();
       assert.ok(p.position[1] < 3, "launch is a hand height, not a ceiling drop");
-      assert.ok(p.velocity[2] < 0, "thrown into the tray (-z)");
+      assert.ok(p.velocity[2] < 0, "thrown into the arena (-z)");
     }
   });
 
-  it("every launch draw fits the whole die inside the tray", () => {
+  it("every launch draw fits the whole die inside the arena", () => {
     // The die's circumradius is ~0.82 (DIE_SCALE 0.72 on circumradius-1.12-1.22
     // geometry), NOT 0.72 -- and a launch that clears the wall by less than
     // that spawns the die inside it, where the solver ejects it at ~10 u/s.
@@ -453,15 +529,25 @@ describe("THROW profile", () => {
     const R = 0.82;
     for (let i = 0; i < 500; i++) {
       const p = throwPose();
+      const r = Math.hypot(p.position[0], p.position[2]);
       assert.ok(
-        Math.abs(p.position[0]) + R < THROW.tray.x,
-        `x ${p.position[0]} is inside the x wall at ${THROW.tray.x}`,
-      );
-      assert.ok(
-        Math.abs(p.position[2]) + R < THROW.tray.z,
-        `z ${p.position[2]} is inside the z wall at ${THROW.tray.z}`,
+        r + R < THROW.arena.radius,
+        `spawn at radius ${r} does not fit inside the ring at ${THROW.arena.radius}`,
       );
     }
+  });
+
+  it("the authored first bounce is four die-heights and reachable", () => {
+    assert.ok(THROW.firstBounceHeights >= 1, "the first bounce is authored");
+    // One die-height is ~1.64, so this is ~6.6 units of rise. The lid is the
+    // only thing above it and must stay clear, or the leap pings off it.
+    const rise = THROW.firstBounceHeights * 1.76;
+    assert.ok(rise < 9, `a ${rise}-unit leap needs headroom under the lid`);
+    // The kick is a velocity, and the velocity that reaches h under g is
+    // sqrt(2gh) -- nothing else. A rebound of that speed must come back down
+    // hard enough to still count as a bounce, or the chain ends at one.
+    const v = reboundSpeed(rise);
+    assert.ok(v > THROW.bounceSpeed, `${v} u/s must outrun the bounce floor`);
   });
 
   it("derived constants come from the profile", () => {
@@ -471,6 +557,18 @@ describe("THROW profile", () => {
     assert.equal(ANG_SLEEP, THROW.rest.ang);
     assert.ok(THROW.gravityY <= -120, "heavy: at least ~2.5x the old -48");
     assert.ok(THROW.physStep <= 1 / 100, "fine steps for fast contacts");
+    // The slam's travel per step against the die's own 0.82 circumradius.
+    // Above about half of it the first contact lands a step late and deep.
+    const perStep = Math.abs(THROW.launch.vy[0]) * THROW.physStep;
+    assert.ok(perStep < 0.45, `${perStep} units per step is tunnelling range`);
+    assert.ok(
+      THROW.contact.wall.restitution <= 0.15,
+      "the ring is dead: a wall touch damps, it does not return the die",
+    );
+    assert.ok(
+      THROW.contact.wall.friction > THROW.contact.friction,
+      "the ring grips harder than the floor",
+    );
     // cannon-es applies damping as v *= (1 - damping) ** dt. At 1 or more the
     // base is zero or negative: the velocity flips sign every step and grows,
     // and the die tunnels straight out through a wall. Found the hard way at
