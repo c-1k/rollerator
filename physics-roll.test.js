@@ -478,6 +478,19 @@ describe("quatSlerp", () => {
     // same rotation: dot is ±1
     almost(Math.abs(m1[0] * m2[0] + m1[1] * m2[1] + m1[2] * m2[2] + m1[3] * m2[3]), 1, 1e-9);
   });
+
+  it("off-midpoint diverges from a plain normalized lerp (proves the trig path, not nlerp)", () => {
+    const t = 0.25;
+    const naiveLerp = qn([
+      (1 - t) * a[0] + t * b[0],
+      (1 - t) * a[1] + t * b[1],
+      (1 - t) * a[2] + t * b[2],
+      (1 - t) * a[3] + t * b[3],
+    ]);
+    const s = quatSlerp(a, b, t);
+    const diff = Math.max(...s.map((v, i) => Math.abs(v - naiveLerp[i])));
+    assert.ok(diff > 1e-3, `expected slerp to diverge from nlerp at t=0.25, diff was ${diff}`);
+  });
 });
 
 describe("interpolateFrame", () => {
@@ -495,5 +508,10 @@ describe("interpolateFrame", () => {
 
   it("quaternion at the midpoint is unit length", () => {
     almost(Math.hypot(...interpolateFrame(f0, f1, 0.5).q), 1, 1e-9);
+  });
+
+  it("clamps t outside [0,1]", () => {
+    assert.deepEqual(interpolateFrame(f0, f1, -0.5).p, [0, 1, 2]);
+    assert.deepEqual(interpolateFrame(f0, f1, 1.5).p, [2, 3, 4]);
   });
 });
