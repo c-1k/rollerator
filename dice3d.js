@@ -987,6 +987,20 @@ export function createDiceStage(canvas, video) {
   const camera = new THREE.PerspectiveCamera(IDLE_FOV, 1, 0.1, 80);
   const idleCam = new THREE.Vector3(0, 8.2, 0);
   const dropCam = new THREE.Vector3(0, 13.6, 0);
+  // How high above the rest the reveal camera ends, which IS the eye-to-aim
+  // distance once the rest height is taken off. It used to be `idleCam.y`:
+  // the crane stopped at the idle height and the settled die sat small in a
+  // wide empty floor -- about 27% of the frame's narrow axis. Cam asked on
+  // 2026-08-23 for the die closer to the viewer, so the crane now ends its
+  // own distance rather than borrowing the idle one.
+  //
+  // The bound is the die staying inside the NARROW axis at every azimuth.
+  // At PRESENT_FOV 44 the half-extent at the aim plane is d*tan(22) on the
+  // vertical and d*tan(22)*aspect on the horizontal, so the narrow one is
+  // d*0.404*min(1, aspect); the die's own circumradius is 0.82. These lifts
+  // put the die at ~41% of the narrow axis in both orientations -- half again
+  // as large as before, with better than 2x of margin left to the frame edge.
+  let revealLift = 5.6;
   const SETTLE_AIM = new THREE.Vector3(0, 0.4, 0);
   let settleY = 0.62;
   camera.up.set(0, 0, -1);
@@ -1184,6 +1198,9 @@ export function createDiceStage(canvas, video) {
     const portrait = camera.aspect < 0.86;
     idleCam.set(0, portrait ? 9.2 : 8.2, 0);
     dropCam.set(0, portrait ? 15.2 : 13.6, 0);
+    // Portrait is framed by its width, which is the shorter side, so it needs
+    // the extra unit to hold the same die-to-frame ratio as landscape.
+    revealLift = portrait ? 6.6 : 5.6;
     if (rollState?.reveal) {
       // Any phase, not just hold: the crane reads st.reveal every frame, so a
       // resize mid-flight has to re-derive it or the landing stays framed for
@@ -1207,9 +1224,9 @@ export function createDiceStage(canvas, video) {
     }
   }
 
-  /** Eye-to-aim distance of the reveal: today's idle height above the aim point. */
+  /** Eye-to-aim distance of the reveal: `revealLift` above the aim point. */
   function revealDistance(landedPos) {
-    return idleCam.y - landedPos[1];
+    return revealLift - landedPos[1];
   }
 
   /** The camera pose that presents face `index` of a die resting at `landedQuat`, at `landedPos`. */

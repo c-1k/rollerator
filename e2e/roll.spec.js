@@ -249,7 +249,9 @@ test("switching environment clears the previous result; resizing keeps the revea
     `camera must sit at the re-framed reveal, got ${JSON.stringify(d.cam)} vs ${JSON.stringify(revealAt)}`,
   ).toEqual(revealAt);
   // The reveal aims at the landing, not the centre: eye-to-aim distance is
-  // the portrait idle height (9.2) above the rest height.
+  // the portrait reveal lift (6.6) above the rest height. It was the portrait
+  // IDLE height (9.2) until 2026-08-23, when the crane was given its own,
+  // shorter distance so the settled die reads closer to the viewer.
   expect(
     d.landedPos,
     "a presented result must carry where it landed",
@@ -258,8 +260,8 @@ test("switching environment clears the previous result; resizing keeps the revea
   const dy = d.reveal.position[1] - d.landedPos[1];
   const dz = d.reveal.position[2] - d.landedPos[2];
   expect(
-    Math.abs(Math.hypot(dx, dy, dz) - (9.2 - d.landedPos[1])),
-    "reveal must aim at the landing: eye-to-aim = 9.2 − restY",
+    Math.abs(Math.hypot(dx, dy, dz) - (6.6 - d.landedPos[1])),
+    "reveal must aim at the landing: eye-to-aim = 6.6 − restY",
   ).toBeLessThan(1e-2);
   const same =
     d.meshQuat[0] * d.landedQuat[0] +
