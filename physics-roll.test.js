@@ -1,0 +1,337 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import {
+  FACE_UV_YAW,
+  GRAVITY_Y,
+  PRESENT_MS,
+  adjacentFaces,
+  assignPolyhedronValues,
+  faceValueTable,
+  flightZoom,
+  icosahedronFaceNormals,
+  isSleepy,
+  landedValue,
+  pairOppositeFaces,
+  restOffsetY,
+  rotateAround,
+  rotateByQuat,
+  slowMoScale,
+  snapProgress,
+  smoothProgress,
+  snapQuaternion,
+  swapValueFaces,
+  throwPose,
+  triangleMedianUp,
+  uniqueVertsAndFaces,
+  upwardFaceIndex,
+} from "./physics-roll.js";
+
+function almost(a, b, eps = 1e-5) {
+  assert.ok(Math.abs(a - b) < eps, `${a} ≉ ${b}`);
+}
+
+function vecAlmost(a, b, eps = 1e-4) {
+  assert.equal(a.length, b.length);
+  for (let i = 0; i < a.length; i++) almost(a[i], b[i], eps);
+}
+
+describe("upwardFaceIndex", () => {
+  const box = [
+    [1, 0, 0],
+    [-1, 0, 0],
+    [0, 1, 0],
+    [0, -1, 0],
+    [0, 0, 1],
+    [0, 0, -1],
+  ];
+
+  it("picks the +Y face at identity", () => {
+    assert.equal(upwardFaceIndex(box, [0, 0, 0, 1]), 2);
+  });
+
+  it("picks the face whose local normal maps onto world up after a snap", () => {
+    const plusZ = 4;
+    const q = snapQuaternion(box[plusZ], [0, 1, 0]);
+    assert.equal(upwardFaceIndex(box, q), plusZ);
+    const world = rotateByQuat(box[plusZ], q);
+    vecAlmost(world, [0, 1, 0], 1e-4);
+  });
+});
+
+describe("snapQuaternion", () => {
+  it("maps the local face normal onto +Y", () => {
+    const q = snapQuaternion([0, 0, 1], [0, 1, 0]);
+    vecAlmost(rotateByQuat([0, 0, 1], q), [0, 1, 0]);
+  });
+
+  it("twists so the face tex-up points toward -Z for a camera on +Z", () => {
+    const q = snapQuaternion([0, 1, 0], [0, 0, 1]);
+    const tex = rotateByQuat([0, 0, 1], q);
+    assert.ok(tex[2] < -0.9, `tex-up should face -Z, got ${tex}`);
+  });
+});
+
+describe("restOffsetY", () => {
+  it("lifts a unit cube so the lowest vertex sits on y=0", () => {
+    const verts = [];
+    for (const x of [-0.5, 0.5]) {
+      for (const y of [-0.5, 0.5]) {
+        for (const z of [-0.5, 0.5]) verts.push([x, y, z]);
+      }
+    }
+    almost(restOffsetY(verts, [0, 0, 0, 1], 1), 0.5);
+    almost(restOffsetY(verts, [0, 0, 0, 1], 0.62), 0.31);
+  });
+});
+
+describe("uniqueVertsAndFaces", () => {
+  it("welds shared vertices across two triangles", () => {
+    const pos = new Float32Array([
+      0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1,
+    ]);
+    const { vertices, faces } = uniqueVertsAndFaces(pos);
+    assert.equal(vertices.length, 4);
+    assert.equal(faces.length, 2);
+    assert.equal(faces[0].length, 3);
+    assert.equal(new Set(faces.flat()).size, 4);
+  });
+});
+
+describe("throwPose", () => {
+  it("drops from high with downward speed, inward travel, and spin", () => {
+    let i = 0;
+    const seq = [0.2, 0.8, 0.3, 0.4, 0.6, 0.1, 0.9, 0.25, 0.75, 0.5, 0.5, 0.5];
+    const rng = () => seq[i++ % seq.length];
+    const pose = throwPose(rng);
+    assert.ok(pose.position[1] > 4.2, `start y ${pose.position[1]}`);
+    assert.ok(pose.velocity[1] < 0, `vy should fall, got ${pose.velocity[1]}`);
+    assert.ok(pose.velocity[2] < 0, `vz should be toward -Z, got ${pose.velocity[2]}`);
+    assert.equal(pose.angularVelocity.length, 3);
+    assert.ok(pose.angularVelocity.some((v) => Math.abs(v) > 1));
+  });
+});
+
+describe("gravity and timing", () => {
+  it("uses strong gravity and a long presentation beat", () => {
+    assert.ok(GRAVITY_Y <= -42, `gravity ${GRAVITY_Y}`);
+    assert.ok(PRESENT_MS >= 1800, `present ${PRESENT_MS}`);
+  });
+});
+
+describe("slowMoScale", () => {
+  it("stays full-speed for the drop, then eases as energy dies", () => {
+    almost(slowMoScale(8, 12, 200), 1);
+    const lateFast = slowMoScale(6, 10, 2000);
+    const lateSlow = slowMoScale(0.2, 0.3, 2000);
+    assert.ok(lateFast > 0.7, `still-energetic late scale ${lateFast}`);
+    assert.ok(lateSlow < 0.4, `resting scale ${lateSlow}`);
+    assert.ok(lateSlow < lateFast);
+  });
+});
+
+describe("flightZoom", () => {
+  it("eases from 0 to 1 over the zoom window", () => {
+    almost(flightZoom(0, 2000), 0);
+    almost(flightZoom(2000, 2000), 1);
+    almost(flightZoom(4000, 2000), 1);
+    const mid = flightZoom(1000, 2000);
+    assert.ok(mid > 0.4 && mid < 0.7, `smoothstep mid ${mid}`);
+  });
+});
+
+describe("landedValue", () => {
+  const box = [
+    [1, 0, 0],
+    [-1, 0, 0],
+    [0, 1, 0],
+    [0, -1, 0],
+    [0, 0, 1],
+    [0, 0, -1],
+  ];
+
+  it("returns the face whose normal maps onto world up", () => {
+    const values = [2, 5, 1, 6, 3, 4];
+    assert.equal(landedValue(box, [0, 0, 0, 1], values), 1);
+    const q = snapQuaternion(box[4], [0, 1, 0]);
+    assert.equal(landedValue(box, q, values), 3);
+  });
+
+  it("reads the live d6 table as 3 at identity (+Y)", () => {
+    assert.equal(landedValue(box, [0, 0, 0, 1], [2, 5, 3, 4, 1, 6]), 3);
+  });
+
+  it("reads whatever face is world-up at the given quaternion, not a pre-roll constant", () => {
+    const values = [2, 5, 3, 4, 1, 6];
+    const identity = landedValue(box, [0, 0, 0, 1], values);
+    const q = snapQuaternion(box[4], [0, 1, 0]);
+    const other = landedValue(box, q, values);
+    assert.equal(identity, 3);
+    assert.equal(other, 1);
+    assert.notEqual(identity, other);
+  });
+});
+
+describe("pairOppositeFaces", () => {
+  it("pairs box faces whose normals are opposite", () => {
+    const box = [
+      [1, 0, 0],
+      [-1, 0, 0],
+      [0, 1, 0],
+      [0, -1, 0],
+      [0, 0, 1],
+      [0, 0, -1],
+    ];
+    const opp = pairOppositeFaces(box);
+    assert.equal(opp[0], 1);
+    assert.equal(opp[1], 0);
+    assert.equal(opp[2], 3);
+    assert.equal(opp[4], 5);
+  });
+
+  it("pairs icosahedron faces with nearly opposite normals", () => {
+    const { normals } = icosahedronFaceNormals();
+    const opp = pairOppositeFaces(normals);
+    assert.equal(opp.length, 20);
+    for (let i = 0; i < 20; i++) {
+      assert.ok(opp[i] >= 0 && opp[i] !== i);
+      assert.equal(opp[opp[i]], i);
+      const d = normals[i][0] * normals[opp[i]][0] + normals[i][1] * normals[opp[i]][1] + normals[i][2] * normals[opp[i]][2];
+      assert.ok(d < -0.98, `opposite dot ${d} for face ${i}`);
+    }
+  });
+});
+
+describe("assignPolyhedronValues", () => {
+  it("puts 20 on the +Y-most icosahedron face with 1 opposite and pairs summing to 21", () => {
+    const { normals } = icosahedronFaceNormals();
+    const values = assignPolyhedronValues(normals, 20);
+    const pole = upwardFaceIndex(normals, [0, 0, 0, 1], [0, 1, 0]);
+    const opp = pairOppositeFaces(normals);
+    assert.equal(values[pole], 20);
+    assert.equal(values[opp[pole]], 1);
+    assert.equal(new Set(values).size, 20);
+    for (let i = 0; i < 20; i++) {
+      assert.equal(values[i] + values[opp[i]], 21);
+    }
+  });
+
+  it("places Bruno-net 11 and 14 next to 20 (7 sits opposite 14, with 1)", () => {
+    const { normals } = icosahedronFaceNormals();
+    const values = assignPolyhedronValues(normals, 20);
+    const pole = values.indexOf(20);
+    const ring = new Set(adjacentFaces(normals, pole, 3).map((i) => values[i]));
+    assert.equal(ring.has(14), true);
+    assert.equal(ring.has(11), true);
+    assert.equal(ring.has(1), false);
+    assert.equal(ring.has(7), false);
+    const i14 = values.indexOf(14);
+    const opp = pairOppositeFaces(normals);
+    assert.equal(values[opp[i14]], 7);
+  });
+
+  it("does not number d20 faces sequentially as f+1", () => {
+    const { normals } = icosahedronFaceNormals();
+    const values = faceValueTable("d20", normals);
+    assert.notDeepEqual(
+      values,
+      Array.from({ length: 20 }, (_, f) => f + 1)
+    );
+    const opp = pairOppositeFaces(normals);
+    for (let i = 0; i < 20; i++) assert.equal(values[i] + values[opp[i]], 21);
+  });
+
+  it("keeps the d6 BoxGeometry table with opposites of 7", () => {
+    const box = [
+      [1, 0, 0],
+      [-1, 0, 0],
+      [0, 1, 0],
+      [0, -1, 0],
+      [0, 0, 1],
+      [0, 0, -1],
+    ];
+    const values = faceValueTable("d6", box);
+    assert.deepEqual(values, [2, 5, 3, 4, 1, 6]);
+    assert.equal(values[0] + values[1], 7);
+    assert.equal(values[2] + values[3], 7);
+    assert.equal(values[4] + values[5], 7);
+  });
+});
+
+describe("swapValueFaces", () => {
+  it("swaps the landed slot with the forced face so world-up reads as force", () => {
+    const box = [
+      [1, 0, 0],
+      [-1, 0, 0],
+      [0, 1, 0],
+      [0, -1, 0],
+      [0, 0, 1],
+      [0, 0, -1],
+    ];
+    const values = [2, 5, 3, 4, 1, 6];
+    assert.equal(landedValue(box, [0, 0, 0, 1], values), 3);
+    const next = swapValueFaces(values, 2, 6);
+    assert.equal(values[2], 3);
+    assert.equal(next[2], 6);
+    assert.equal(next[5], 3);
+    assert.equal(landedValue(box, [0, 0, 0, 1], next), 6);
+  });
+
+  it("is a no-op when the rest pose already shows the forced value", () => {
+    const values = [2, 5, 3, 4, 1, 6];
+    const next = swapValueFaces(values, 2, 3);
+    assert.deepEqual(next, values);
+  });
+
+  it("forces 7 onto the +Y d20 face by swapping values", () => {
+    const { normals } = icosahedronFaceNormals();
+    const values = assignPolyhedronValues(normals, 20);
+    const pole = upwardFaceIndex(normals, [0, 0, 0, 1]);
+    assert.equal(values[pole], 20);
+    const next = swapValueFaces(values, pole, 7);
+    assert.equal(landedValue(normals, [0, 0, 0, 1], next), 7);
+    assert.equal(next[values.indexOf(7)], 20);
+  });
+});
+
+describe("triangleMedianUp", () => {
+  it("points toward the highest vertex in the face plane", () => {
+    const up = triangleMedianUp([0, 0, 0], [1, 0, 0], [0.5, 0.8, 0], [0, 1, 0]);
+    assert.ok(up[1] > 0.9, `tex-up should aim at the top vertex, got ${up}`);
+    almost(up[2], 0);
+  });
+});
+
+describe("FACE_UV_YAW", () => {
+  it("uses a DiceFactory-style d20 twist of about -7.5 degrees", () => {
+    almost(FACE_UV_YAW.d20, (-7.5 * Math.PI) / 180, 1e-8);
+    const spun = rotateAround([0, 1, 0], [0, 0, 1], FACE_UV_YAW.d20);
+    assert.ok(spun[0] > 0, "yaw around +Z sends +Y toward +X");
+    assert.ok(spun[1] > 0.98);
+  });
+});
+
+describe("isSleepy", () => {
+  it("is true only when linear and angular speed are both tiny", () => {
+    assert.equal(isSleepy([0, 0, 0], [0, 0, 0]), true);
+    assert.equal(isSleepy([0.5, 0, 0], [0, 0, 0]), false);
+    assert.equal(isSleepy([0, 0, 0], [2, 0, 0]), false);
+  });
+});
+
+describe("snapProgress", () => {
+  it("is 0 at t=0, 1 at duration, and eases out", () => {
+    almost(snapProgress(0, 300), 0);
+    almost(snapProgress(300, 300), 1);
+    almost(snapProgress(400, 300), 1);
+    const mid = snapProgress(150, 300);
+    assert.ok(mid > 0.5, `ease-out should be past halfway at t=0.5, got ${mid}`);
+  });
+});
+
+describe("smoothProgress", () => {
+  it("is 0 at t=0, 1 at duration, and is halfway at midtime", () => {
+    almost(smoothProgress(0, 400), 0);
+    almost(smoothProgress(400, 400), 1);
+    almost(smoothProgress(200, 400), 0.5, 1e-4);
+  });
+});

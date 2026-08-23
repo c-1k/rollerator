@@ -5,7 +5,33 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
-import { createRollController } from "./roll-engine.js";
+import * as CANNON from "cannon-es";
+import { createRollController } from "./roll-engine.js?v=cine-wide2";
+import {
+  FACE_UV_YAW,
+  FLIGHT_MAX_MS,
+  GRAVITY_Y,
+  HOLD_MS,
+  PRESENT_MS,
+  SNAP_MS,
+  faceValueTable,
+  flightZoom,
+  isSleepy,
+  landedValue,
+  restOffsetY,
+  rotateAround,
+  slowMoScale,
+  smoothProgress,
+  throwPose,
+  triangleMedianUp,
+  uniqueVertsAndFaces,
+  upwardFaceIndex,
+} from "./physics-roll.js?v=cine-wide2";
+
+const DIE_SCALE = 0.72;
+const TEX_BODY = 2048;
+const TEX_FACE = 1024;
+let texAniso = 8;
 
 export const DICE = {
   d4: { sides: 4, min: 1 },
@@ -20,15 +46,17 @@ export const DICE = {
 export const THEMES = {
   siege: {
     body: "#2a2218",
-    ink: "#ffd27a",
-    inkHot: "#fff4d2",
     glow: "#e39a3a",
     edge: "#c49a4a",
     core: 0xe39a3a,
     coreGain: 3.4,
+    ink: "#ffd27a",
+    inkHot: "#fff4d2",
     metalness: 0.88,
     roughness: 0.38,
     transmission: 0,
+    ior: 1.5,
+    thickness: 0.5,
     clearcoat: 0.18,
     envMap: 0.42,
     ambient: 0x3a2a1c,
@@ -39,17 +67,19 @@ export const THEMES = {
   },
   bog: {
     body: "#1a2418",
-    ink: "#c6e38a",
-    inkHot: "#eaffc4",
     glow: "#7aa33a",
     edge: "#4a6a32",
     core: 0x6a8a28,
-    coreGain: 2.2,
+    coreGain: 0.7,
+    ink: "#c6e38a",
+    inkHot: "#eaffc4",
     metalness: 0.35,
     roughness: 0.58,
     transmission: 0,
-    clearcoat: 0.22,
-    envMap: 0.28,
+    ior: 1.5,
+    thickness: 1.5,
+    clearcoat: 0.14,
+    envMap: 0.32,
     ambient: 0x1c2a18,
     key: 0xa8c070,
     fill: 0x3a5048,
@@ -58,17 +88,19 @@ export const THEMES = {
   },
   forest: {
     body: "#3a2a18",
-    ink: "#e2c07a",
-    inkHot: "#ffe9b0",
     glow: "#c48a3a",
     edge: "#6a4a28",
     core: 0xb47a28,
-    coreGain: 2.4,
+    coreGain: 0.55,
+    ink: "#e2c07a",
+    inkHot: "#ffe9b0",
     metalness: 0.18,
     roughness: 0.68,
     transmission: 0,
+    ior: 1.5,
+    thickness: 1.5,
     clearcoat: 0.12,
-    envMap: 0.32,
+    envMap: 0.3,
     ambient: 0x2a2418,
     key: 0xe8d090,
     fill: 0x3a5040,
@@ -77,17 +109,19 @@ export const THEMES = {
   },
   cavern: {
     body: "#2a2828",
-    ink: "#e8c9a0",
-    inkHot: "#ffe8c8",
     glow: "#d4a056",
     edge: "#8a7a68",
     core: 0xd4a056,
-    coreGain: 2.8,
+    coreGain: 0.65,
+    ink: "#e8c9a0",
+    inkHot: "#ffe8c8",
     metalness: 0.12,
     roughness: 0.58,
     transmission: 0,
-    clearcoat: 0.18,
-    envMap: 0.35,
+    ior: 1.52,
+    thickness: 1.6,
+    clearcoat: 0.14,
+    envMap: 0.32,
     ambient: 0x221c18,
     key: 0xffd0a0,
     fill: 0x4a5868,
@@ -96,12 +130,12 @@ export const THEMES = {
   },
   ice: {
     body: "#d8eef8",
-    ink: "#163a58",
-    inkHot: "#082238",
     glow: "#9fd8ff",
     edge: "#e8f6ff",
     core: 0x9fd4ff,
     coreGain: 4.6,
+    ink: "#163a58",
+    inkHot: "#082238",
     metalness: 0.05,
     roughness: 0.22,
     transmission: 0.22,
@@ -114,20 +148,23 @@ export const THEMES = {
     fill: 0x6a90b8,
     spot: 0xb8e0ff,
     style: "ice",
+    filmPan: 0.3,
   },
   volcano: {
     body: "#140c0a",
-    ink: "#7a3a10",
-    inkHot: "#ffe7a8",
     glow: "#ff6a18",
     edge: "#ff8a20",
     core: 0xff3a00,
     coreGain: 9,
+    ink: "#7a3a10",
+    inkHot: "#ffe7a8",
     metalness: 0.12,
     roughness: 0.82,
     transmission: 0,
-    clearcoat: 0.06,
-    envMap: 0.22,
+    ior: 1.5,
+    thickness: 1.4,
+    clearcoat: 0.1,
+    envMap: 0.28,
     ambient: 0x3a1810,
     key: 0xffb070,
     fill: 0x402018,
@@ -136,17 +173,19 @@ export const THEMES = {
   },
   hoard: {
     body: "#5a3a10",
-    ink: "#fff0b8",
-    inkHot: "#ffffff",
     glow: "#ffd060",
     edge: "#ffd78a",
     core: 0xffc030,
     coreGain: 4.2,
+    ink: "#fff0b8",
+    inkHot: "#ffffff",
     metalness: 0.92,
     roughness: 0.28,
     transmission: 0,
-    clearcoat: 0.28,
-    envMap: 0.4,
+    ior: 1.52,
+    thickness: 1.6,
+    clearcoat: 0.18,
+    envMap: 0.38,
     ambient: 0x3a2a10,
     key: 0xffe8a8,
     fill: 0x805028,
@@ -155,7 +194,7 @@ export const THEMES = {
   },
 };
 
-function formatFace(kind, n) {
+export function formatFace(kind, n) {
   if (kind === "d100") return String(n).padStart(2, "0");
   if (kind === "d10" && n === 10) return "0";
   return String(n);
@@ -204,20 +243,26 @@ function canvasFrom(data, size) {
 
 const pbrCache = new Map();
 
-function bodyPBR(theme, size = 1024) {
-  const key = theme.style;
+function bodyPBR(theme, size = TEX_BODY) {
+  const key = `relic-${theme.style}-${theme.body}-${size}`;
   if (pbrCache.has(key)) return pbrCache.get(key);
 
   const albedo = new ImageData(size, size);
   const emissive = new ImageData(size, size);
   const roughness = new ImageData(size, size);
+  const metal = new ImageData(size, size);
   const normal = new ImageData(size, size);
   const height = new Float32Array(size * size);
   const A = albedo.data;
   const E = emissive.data;
   const R = roughness.data;
+  const M = metal.data;
   const N = normal.data;
   const style = theme.style;
+  const base = new THREE.Color(theme.body);
+  const br = base.r * 255;
+  const bgc = base.g * 255;
+  const bb = base.b * 255;
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
@@ -225,88 +270,76 @@ function bodyPBR(theme, size = 1024) {
       const v = y / size;
       const i = y * size + x;
       const p = i * 4;
-      let h = fbm(u * 8, v * 8);
+      const grain = fbm(u * 72, v * 72);
+      const hair = Math.pow(
+        Math.abs(Math.sin((u * 86 + v * 4.2) * Math.PI) * 0.62 + Math.sin((u * 5.5 - v * 70) * Math.PI) * 0.38),
+        12
+      );
+      let h = fbm(u * 9, v * 9) * 0.72 + grain * 0.22 + hair * 0.12;
       let cr = 0;
       if (style === "lava") {
-        h = fbm(u * 6, v * 6) * 0.7 + fbm(u * 28, v * 28) * 0.3;
-        cr = Math.pow(Math.max(0, fbm(u * 14 + 3, v * 3.5) - 0.52), 1.4);
+        h = fbm(u * 6, v * 6) * 0.62 + fbm(u * 36, v * 36) * 0.28 + grain * 0.1;
+        cr = Math.pow(Math.max(0, fbm(u * 16 + 3, v * 4.2) - 0.5), 1.35);
       } else if (style === "ice") {
-        h = fbm(u * 10, v * 10) * 0.55 + fbm(u * 40, v * 40) * 0.45;
+        h = fbm(u * 11, v * 11) * 0.45 + fbm(u * 48, v * 48) * 0.4 + grain * 0.15;
       } else if (style === "iron") {
-        h = fbm(u * 18, v * 3) * 0.65 + fbm(u * 40, v * 40) * 0.35;
+        h = fbm(u * 22, v * 3.2) * 0.55 + grain * 0.3 + hair * 0.22;
       } else if (style === "gold") {
-        h = fbm(u * 12, v * 12) * 0.5 + fbm(u * 48, v * 8) * 0.5;
-      } else {
-        h = fbm(u * 9, v * 9);
+        h = fbm(u * 14, v * 14) * 0.4 + fbm(u * 52, v * 9) * 0.32 + hair * 0.28;
       }
-      height[i] = h + cr * 0.85;
+      height[i] = h + cr * 0.9;
 
-      if (style === "lava") {
-        const rock = 8 + h * 22;
-        const magma = cr;
-        A[p] = rock + magma * 160;
-        A[p + 1] = rock * 0.4 + magma * 48;
-        A[p + 2] = rock * 0.22;
-        E[p] = magma * 255;
-        E[p + 1] = magma * 70;
-        E[p + 2] = magma * 8;
-        R[p] = R[p + 1] = R[p + 2] = (1 - magma) * 230 + 12;
-      } else if (style === "ice") {
-        const frost = 180 + h * 70;
-        A[p] = frost * 0.9;
-        A[p + 1] = frost * 0.96;
-        A[p + 2] = frost;
-        E[p] = 8;
-        E[p + 1] = 18;
-        E[p + 2] = 28;
-        R[p] = R[p + 1] = R[p + 2] = 20 + h * 50;
+      const cloud = fbm(u * 2.6, v * 2.6);
+      const milk = fbm(u * 6.5, v * 6.5);
+      const pit = hash2(x * 0.17 + 3.1, y * 0.29) > 0.991 ? 1 : 0;
+      const stain = Math.max(0, fbm(u * 4.2 + 1.7, v * 3.4) - 0.58) * 1.8;
+      const soot = Math.max(0, fbm(u * 3.1 + 0.4, v * 2.8) - 0.38) * 1.6;
+      const scorch = Math.pow(Math.max(0, fbm(u * 8.2 + 2.1, v * 5.4) - 0.5), 1.25);
+      let r = br * (0.78 + cloud * 0.16 - milk * 0.1 - h * 0.12);
+      let g = bgc * (0.78 + cloud * 0.14 - milk * 0.1 - h * 0.12);
+      let b = bb * (0.78 + cloud * 0.12 - milk * 0.08 - h * 0.1);
+      if (style === "ice") {
+        r = 196 + cloud * 18 - milk * 22 - h * 12;
+        g = 214 + cloud * 16 - milk * 16 - h * 8;
+        b = 226 + cloud * 14 - milk * 10 - h * 6;
       } else if (style === "iron") {
-        const g = 28 + h * 40;
-        A[p] = g + 10;
-        A[p + 1] = g * 0.78;
-        A[p + 2] = g * 0.55;
-        E[p] = 18;
-        E[p + 1] = 10;
-        E[p + 2] = 4;
-        R[p] = R[p + 1] = R[p + 2] = 50 + h * 40;
+        r = r * (1 - soot * 0.62) * 0.82 + scorch * 28;
+        g = g * (1 - soot * 0.58) * 0.74 + scorch * 10;
+        b = b * (1 - soot * 0.55) * 0.62 + scorch * 2;
+      } else if (style === "lava") {
+        const magma = cr;
+        r = 28 + h * 16 + magma * 150;
+        g = 14 + h * 8 + magma * 38;
+        b = 10 + magma * 6;
+        E[p] = magma * 200;
+        E[p + 1] = magma * 60;
+        E[p + 2] = magma * 8;
       } else if (style === "gold") {
-        A[p] = 140 + h * 90;
-        A[p + 1] = 100 + h * 70;
-        A[p + 2] = 28 + h * 20;
-        E[p] = 30;
-        E[p + 1] = 18;
-        E[p + 2] = 4;
-        R[p] = R[p + 1] = R[p + 2] = 35 + h * 40;
-      } else if (style === "bark") {
-        A[p] = 50 + h * 40;
-        A[p + 1] = 32 + h * 24;
-        A[p + 2] = 14;
-        E[p] = 12;
-        E[p + 1] = 8;
-        E[p + 2] = 2;
-        R[p] = R[p + 1] = R[p + 2] = 140 + h * 80;
-      } else if (style === "wet") {
-        A[p] = 22 + h * 30;
-        A[p + 1] = 36 + h * 40;
-        A[p + 2] = 18 + h * 16;
-        E[p] = 6;
-        E[p + 1] = 14;
-        E[p + 2] = 4;
-        R[p] = R[p + 1] = R[p + 2] = 40 + h * 50;
-      } else {
-        A[p] = 36 + h * 36;
-        A[p + 1] = 34 + h * 30;
-        A[p + 2] = 32 + h * 26;
-        E[p] = 12;
-        E[p + 1] = 8;
-        E[p + 2] = 4;
-        R[p] = R[p + 1] = R[p + 2] = 110 + h * 70;
+        r = r * 1.08 + 10;
+        g = g * 0.95;
+        b = b * 0.72;
       }
-      A[p + 3] = E[p + 3] = R[p + 3] = 255;
+      const grime = stain * 0.55 + hair * 0.35 + pit * 0.8 + soot * 0.25;
+      r = r * (1 - grime * 0.48) - stain * 14;
+      g = g * (1 - grime * 0.46) - stain * 12;
+      b = b * (1 - grime * 0.42) - stain * 10;
+      if (style !== "lava") {
+        E[p] = style === "iron" ? 8 + scorch * 18 : 3;
+        E[p + 1] = style === "iron" ? 3 + scorch * 5 : 2;
+        E[p + 2] = 1;
+      }
+      A[p] = Math.max(0, Math.min(255, r));
+      A[p + 1] = Math.max(0, Math.min(255, g));
+      A[p + 2] = Math.max(0, Math.min(255, b));
+      const rough = style === "ice" ? 70 + milk * 50 + hair * 40 : 130 + milk * 50 + hair * 70 + pit * 80 + stain * 50 + soot * 40;
+      R[p] = R[p + 1] = R[p + 2] = Math.max(40, Math.min(255, rough));
+      const met = style === "iron" ? 10 + pit * 8 : 5 + pit * 10;
+      M[p] = M[p + 1] = M[p + 2] = met;
+      A[p + 3] = E[p + 3] = R[p + 3] = M[p + 3] = 255;
     }
   }
 
-  const strength = style === "lava" ? 4.2 : 2.6;
+  const strength = style === "lava" ? 2.8 : 1.55;
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const i = y * size + x;
@@ -333,6 +366,7 @@ function bodyPBR(theme, size = 1024) {
     albedo: canvasFrom(albedo, size),
     emissive: canvasFrom(emissive, size),
     roughness: canvasFrom(roughness, size),
+    metalness: canvasFrom(metal, size),
     normal: canvasFrom(normal, size),
   };
   pbrCache.set(key, maps);
@@ -342,7 +376,10 @@ function bodyPBR(theme, size = 1024) {
 function texFrom(canvas, repeat = false) {
   const t = new THREE.CanvasTexture(canvas);
   t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 8;
+  t.anisotropy = texAniso;
+  t.generateMipmaps = true;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.magFilter = THREE.LinearFilter;
   t.wrapS = t.wrapT = repeat ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
   t.needsUpdate = true;
   return t;
@@ -351,7 +388,10 @@ function texFrom(canvas, repeat = false) {
 function linTex(canvas, repeat = false) {
   const t = new THREE.CanvasTexture(canvas);
   t.colorSpace = THREE.NoColorSpace;
-  t.anisotropy = 8;
+  t.anisotropy = texAniso;
+  t.generateMipmaps = true;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.magFilter = THREE.LinearFilter;
   t.wrapS = t.wrapT = repeat ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
   t.needsUpdate = true;
   return t;
@@ -384,11 +424,73 @@ function blurGray(src, size, radius) {
   return out;
 }
 
-function numberOverlay(label, hot, theme, maps) {
-  const size = 512;
+function runeSeed(label) {
+  let h = 2166136261;
+  for (let i = 0; i < label.length; i++) {
+    h ^= label.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) / 4294967296;
+}
+
+function mulberry(seed) {
+  let t = (seed * 1831565813) >>> 0;
+  return () => {
+    t += 0x6d2b79f5;
+    let r = Math.imul(t ^ (t >>> 15), 1 | t);
+    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function drawAncientMarks(ctx, size, label) {
+  const rng = mulberry(runeSeed(label) + 0.17);
   const cx = size / 2;
   const cy = size / 2;
-  const fs = label.length > 2 ? 72 : label.length > 1 ? 88 : 118;
+  ctx.save();
+  ctx.strokeStyle = "#fff";
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  const count = 2 + Math.floor(rng() * 3);
+  for (let i = 0; i < count; i++) {
+    const ang = rng() * Math.PI * 2;
+    const rad = size * (0.34 + rng() * 0.14);
+    const x = cx + Math.cos(ang) * rad;
+    const y = cy + Math.sin(ang) * rad;
+    const s = size * (0.03 + rng() * 0.05);
+    ctx.lineWidth = size * (0.006 + rng() * 0.005);
+    ctx.globalAlpha = 0.05 + rng() * 0.04;
+    ctx.beginPath();
+    ctx.moveTo(x, y - s);
+    ctx.lineTo(x, y + s);
+    const dir = rng() > 0.5 ? 1 : -1;
+    if (rng() > 0.22) {
+      ctx.moveTo(x, y - s * (0.15 + rng() * 0.4));
+      ctx.lineTo(x + dir * s * (0.45 + rng() * 0.4), y + s * (rng() * 0.5 - 0.1));
+    }
+    if (rng() > 0.45) {
+      ctx.moveTo(x - s * 0.35, y + s * 0.55);
+      ctx.lineTo(x + s * 0.35, y + s * (0.35 + rng() * 0.3));
+    }
+    if (rng() > 0.7) {
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + dir * s * 0.55, y - s * 0.15);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function inkLuma(hex) {
+  const c = new THREE.Color(hex);
+  return c.r * 0.3 + c.g * 0.59 + c.b * 0.11;
+}
+
+function numberOverlay(label, hot, theme, maps) {
+  const size = TEX_FACE;
+  const cx = size / 2;
+  const cy = size / 2;
+  const fs = label.length > 2 ? 280 : label.length > 1 ? 368 : 460;
   const font = `700 ${fs}px Cinzel, serif`;
 
   const maskC = document.createElement("canvas");
@@ -396,16 +498,27 @@ function numberOverlay(label, hot, theme, maps) {
   const mctx = maskC.getContext("2d");
   mctx.fillStyle = "#000";
   mctx.fillRect(0, 0, size, size);
+  drawAncientMarks(mctx, size, label);
+  mctx.globalAlpha = 1;
   mctx.fillStyle = "#fff";
+  mctx.strokeStyle = "#fff";
+  mctx.lineJoin = "round";
+  mctx.lineCap = "round";
+  mctx.lineWidth = fs * 0.12;
   mctx.font = font;
   mctx.textAlign = "center";
   mctx.textBaseline = "middle";
-  mctx.fillText(label, cx, cy);
+  mctx.strokeText(label, cx, cy + fs * 0.02);
+  mctx.fillText(label, cx, cy + fs * 0.02);
   const maskPx = mctx.getImageData(0, 0, size, size).data;
   const glyph = new Float32Array(size * size);
   for (let i = 0; i < glyph.length; i++) glyph[i] = maskPx[i * 4] / 255;
-  const soft = blurGray(glyph, size, 4);
+  const soft = blurGray(glyph, size, 6);
 
+  const dirt = new THREE.Color(theme.ink);
+  const dirtHot = new THREE.Color(theme.inkHot);
+  const lightInk = inkLuma(hot ? theme.inkHot : theme.ink) > 0.45;
+  const rim = lightInk ? new THREE.Color("#1a120c") : new THREE.Color("#f4ead8");
   const albedo = document.createElement("canvas");
   albedo.width = albedo.height = size;
   const a = albedo.getContext("2d");
@@ -415,40 +528,47 @@ function numberOverlay(label, hot, theme, maps) {
   for (let i = 0; i < glyph.length; i++) {
     const g = glyph[i];
     const s = soft[i];
-    if (s < 0.02) continue;
+    if (s < 0.012) continue;
     const p = i * 4;
     const y = (i / size) | 0;
-    const recess = 0.38 + g * 0.42;
+    const well = Math.max(s, g);
     const bevel = (y - cy) / (fs * 0.55);
-    const shade = 1 - recess * Math.max(s, g) + Math.max(-0.12, Math.min(0.1, bevel * 0.12));
+    const shade = 1 - well * 0.12 + Math.max(-0.06, Math.min(0.05, bevel * 0.06));
     D[p] = Math.max(0, D[p] * shade);
     D[p + 1] = Math.max(0, D[p + 1] * shade);
     D[p + 2] = Math.max(0, D[p + 2] * shade);
+    const edge = Math.max(0, s * 1.25 - g) * 1.85;
+    if (edge > 0.03) {
+      const ew = Math.min(1, edge);
+      D[p] = D[p] * (1 - ew) + rim.r * 255 * ew;
+      D[p + 1] = D[p + 1] * (1 - ew) + rim.g * 255 * ew;
+      D[p + 2] = D[p + 2] * (1 - ew) + rim.b * 255 * ew;
+    }
+    const fill = Math.min(1, g * 1.0 + s * 0.12);
+    const cr = hot ? dirtHot.r : dirt.r;
+    const cg = hot ? dirtHot.g : dirt.g;
+    const cb = hot ? dirtHot.b : dirt.b;
+    D[p] = D[p] * (1 - fill) + cr * 255 * fill;
+    D[p + 1] = D[p + 1] * (1 - fill) + cg * 255 * fill;
+    D[p + 2] = D[p + 2] * (1 - fill) + cb * 255 * fill;
   }
   a.putImageData(img, 0, 0);
-  a.globalAlpha = hot ? 0.42 : 0.22;
-  a.fillStyle = hot ? theme.inkHot : theme.ink;
-  a.font = font;
-  a.textAlign = "center";
-  a.textBaseline = "middle";
-  a.fillText(label, cx, cy + 1);
-  a.globalAlpha = 1;
 
   const emissive = document.createElement("canvas");
   emissive.width = emissive.height = size;
   const e = emissive.getContext("2d");
   e.drawImage(maps.emissive, 0, 0, size, size);
-  if (hot) {
-    e.globalAlpha = 0.85;
-    e.fillStyle = theme.inkHot;
-    e.shadowColor = theme.glow;
-    e.shadowBlur = 22;
-    e.font = font;
-    e.textAlign = "center";
-    e.textBaseline = "middle";
-    e.fillText(label, cx, cy);
-    e.globalAlpha = 1;
-  }
+  e.fillStyle = hot ? theme.inkHot : theme.ink;
+  e.strokeStyle = e.fillStyle;
+  e.font = font;
+  e.textAlign = "center";
+  e.textBaseline = "middle";
+  e.lineJoin = "round";
+  e.lineWidth = fs * 0.08;
+  e.globalAlpha = hot ? 0.95 : 0.4;
+  e.strokeText(label, cx, cy + fs * 0.02);
+  e.fillText(label, cx, cy + fs * 0.02);
+  e.globalAlpha = 1;
 
   const nC = document.createElement("canvas");
   nC.width = nC.height = size;
@@ -457,12 +577,12 @@ function numberOverlay(label, hot, theme, maps) {
   const nImg = nctx.getImageData(0, 0, size, size);
   const N = nImg.data;
   const height = new Float32Array(size * size);
-  for (let i = 0; i < glyph.length; i++) height[i] = 0.5 - soft[i] * 0.16 - glyph[i] * 0.34;
-  const strength = 7.5;
+  for (let i = 0; i < glyph.length; i++) height[i] = 0.5 - soft[i] * 0.18 - glyph[i] * 0.36;
+  const strength = 8.2;
   for (let y = 1; y < size - 1; y++) {
     for (let x = 1; x < size - 1; x++) {
       const i = y * size + x;
-      if (soft[i] < 0.03) continue;
+      if (soft[i] < 0.02) continue;
       const hL = height[i - 1];
       const hR = height[i + 1];
       const hD = height[i - size];
@@ -474,7 +594,7 @@ function numberOverlay(label, hot, theme, maps) {
       nx *= inv;
       ny *= inv;
       nz *= inv;
-      const w = Math.min(1, soft[i] * 1.6);
+      const w = Math.min(1, soft[i] * 1.5);
       const p = i * 4;
       const bx = (N[p] / 255) * 2 - 1;
       const by = (N[p + 1] / 255) * 2 - 1;
@@ -490,32 +610,46 @@ function numberOverlay(label, hot, theme, maps) {
   }
   nctx.putImageData(nImg, 0, 0);
 
-  return { albedo, emissive, normal: nC };
+  const roughC = document.createElement("canvas");
+  roughC.width = roughC.height = size;
+  const rctx = roughC.getContext("2d");
+  rctx.drawImage(maps.roughness, 0, 0, size, size);
+  const rImg = rctx.getImageData(0, 0, size, size);
+  const RD = rImg.data;
+  for (let i = 0; i < glyph.length; i++) {
+    if (soft[i] < 0.015) continue;
+    const p = i * 4;
+    const grit = 140 + glyph[i] * 70;
+    RD[p] = RD[p + 1] = RD[p + 2] = Math.max(RD[p], grit * soft[i] + RD[p] * (1 - soft[i]));
+  }
+  rctx.putImageData(rImg, 0, 0);
+
+  return { albedo, emissive, normal: nC, roughness: roughC };
 }
 
 function edgeLook(theme) {
   if (theme.style === "ice") {
-    return { round: 0.78, rim: new THREE.Color("#f4fbff"), glow: 1.05, rough: 0.04, paint: 0.82 };
+    return { round: 0.62, rim: new THREE.Color("#9bb8c8"), glow: 0.08, rough: 0.38, paint: 0.32, metal: 0.04 };
   }
   if (theme.style === "lava") {
-    return { round: 0.5, rim: new THREE.Color("#ff5a10"), glow: 2.1, rough: 0.92, paint: 0.62 };
+    return { round: 0.58, rim: new THREE.Color("#2a1008"), glow: 0.55, rough: 0.88, paint: 0.42, metal: 0.08 };
   }
   if (theme.style === "gold") {
-    return { round: 0.4, rim: new THREE.Color("#ffe08a"), glow: 0.55, rough: 0.2, paint: 0.45 };
+    return { round: 0.55, rim: new THREE.Color("#6a4a18"), glow: 0.06, rough: 0.55, paint: 0.38, metal: 0.35 };
   }
   if (theme.style === "wet") {
-    return { round: 0.48, rim: new THREE.Color("#6a8a40"), glow: 0.25, rough: 0.18, paint: 0.5 };
+    return { round: 0.58, rim: new THREE.Color("#1a2a14"), glow: 0.04, rough: 0.62, paint: 0.36, metal: 0.05 };
   }
   if (theme.style === "bark") {
-    return { round: 0.44, rim: new THREE.Color("#2a4a18"), glow: 0.12, rough: 0.85, paint: 0.4 };
+    return { round: 0.6, rim: new THREE.Color("#1a1008"), glow: 0.02, rough: 0.82, paint: 0.4, metal: 0.03 };
   }
   if (theme.style === "stone") {
-    return { round: 0.42, rim: new THREE.Color("#cbb89a"), glow: 0.18, rough: 0.7, paint: 0.35 };
+    return { round: 0.57, rim: new THREE.Color("#5a4a3a"), glow: 0.03, rough: 0.78, paint: 0.34, metal: 0.04 };
   }
-  return { round: 0.46, rim: new THREE.Color("#8a6a38"), glow: 0.35, rough: 0.45, paint: 0.38 };
+  return { round: 0.58, rim: new THREE.Color("#3a2a1c"), glow: 0.04, rough: 0.7, paint: 0.36, metal: 0.12 };
 }
 
-function weatherMaterial(mat, theme) {
+function weatherMaterial(mat, theme, seed = 0.37) {
   const look = edgeLook(theme);
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uRound = { value: look.round };
@@ -523,6 +657,8 @@ function weatherMaterial(mat, theme) {
     shader.uniforms.uRimGlow = { value: look.glow };
     shader.uniforms.uRimRough = { value: look.rough };
     shader.uniforms.uRimPaint = { value: look.paint };
+    shader.uniforms.uRimMetal = { value: look.metal };
+    shader.uniforms.uChipSeed = { value: seed };
     shader.vertexShader = shader.vertexShader
       .replace(
         "#include <common>",
@@ -545,33 +681,65 @@ function weatherMaterial(mat, theme) {
         uniform float uRimGlow;
         uniform float uRimRough;
         uniform float uRimPaint;
+        uniform float uRimMetal;
+        uniform float uChipSeed;
         varying vec3 vObjPos;
         varying vec2 vFaceUv;`
       )
       .replace(
         "#include <map_fragment>",
         `#include <map_fragment>
-        float rim = smoothstep(0.24, 0.47, length(vFaceUv - vec2(0.5)));
-        diffuseColor.rgb = mix(diffuseColor.rgb, uRimColor, rim * uRimPaint);`
+        float radial = length(vFaceUv - vec2(0.5));
+        float nwear = fract(sin(dot(vFaceUv + uChipSeed, vec2(12.9898, 78.233))) * 43758.5453);
+        float rim = smoothstep(0.18, 0.47, radial + nwear * 0.06);
+        float corner = smoothstep(0.28, 0.5, radial + nwear * 0.04);
+        float chips = 0.0;
+        for (int i = 0; i < 6; i++) {
+          float fi = float(i);
+          vec2 seed = vec2(fi * 1.71 + uChipSeed * 8.0, fi * 2.29 + 1.13);
+          float h1 = fract(sin(dot(seed, vec2(127.1, 311.7))) * 43758.5453);
+          float h2 = fract(sin(dot(seed.yx, vec2(269.5, 183.3))) * 43758.5453);
+          float h3 = fract(sin(dot(seed + 4.2, vec2(419.2, 371.9))) * 43758.5453);
+          if (h3 < 0.38) continue;
+          float ang = h1 * 6.28318;
+          vec2 site = vec2(0.5) + vec2(cos(ang), sin(ang)) * (0.34 + h2 * 0.16);
+          float size = 0.016 + h2 * 0.034;
+          float d = length(vFaceUv - site);
+          chips = max(chips, smoothstep(size, size * 0.2, d));
+        }
+        chips *= smoothstep(0.2, 0.4, radial);
+        diffuseColor.rgb = mix(diffuseColor.rgb, uRimColor, rim * uRimPaint);
+        diffuseColor.rgb *= 1.0 - corner * 0.2;
+        diffuseColor.rgb = mix(diffuseColor.rgb, uRimColor * 0.28, chips * 0.9);
+        diffuseColor.rgb *= 1.0 - chips * 0.45;`
       )
       .replace(
         "#include <roughnessmap_fragment>",
         `#include <roughnessmap_fragment>
-        roughnessFactor = mix(roughnessFactor, uRimRough, rim);`
+        roughnessFactor = mix(roughnessFactor, uRimRough, rim);
+        roughnessFactor = mix(roughnessFactor, 0.95, corner * 0.6 + chips * 0.85);`
+      )
+      .replace(
+        "#include <metalnessmap_fragment>",
+        `#include <metalnessmap_fragment>
+        metalnessFactor = mix(metalnessFactor, uRimMetal, rim);`
       )
       .replace(
         "#include <normal_fragment_maps>",
         `#include <normal_fragment_maps>
         vec3 chubby = normalize(vObjPos);
-        normal = normalize(mix(normal, chubby, uRound * (0.35 + 0.65 * rim)));`
+        normal = normalize(mix(normal, chubby, uRound * (0.22 + 0.78 * corner)));
+        vec3 chipN = vec3(-dFdx(chips), -dFdy(chips), 0.22);
+        normal = normalize(mix(normal, normalize(normal + chipN), chips));`
       )
       .replace(
         "#include <emissivemap_fragment>",
         `#include <emissivemap_fragment>
-        totalEmissiveRadiance += uRimColor * (rim * uRimGlow);`
+        totalEmissiveRadiance += uRimColor * (rim * uRimGlow);
+        totalEmissiveRadiance *= 1.0 - corner * 0.5;`
       );
   };
-  mat.customProgramCacheKey = () => `weather-${theme.style}`;
+  mat.customProgramCacheKey = () => `weather-chips-${theme.style}`;
   return mat;
 }
 
@@ -581,36 +749,40 @@ function faceMaterial(label, hot, theme) {
   const map = texFrom(overlay.albedo);
   const emissiveMap = texFrom(overlay.emissive);
   const normalMap = linTex(overlay.normal);
-  const roughnessMap = linTex(maps.roughness, true);
+  const roughnessMap = linTex(overlay.roughness);
+  const metalnessMap = linTex(maps.metalness, true);
   map.colorSpace = THREE.SRGBColorSpace;
   emissiveMap.colorSpace = THREE.SRGBColorSpace;
   const mat = new THREE.MeshPhysicalMaterial({
     color: 0xffffff,
     metalness: theme.metalness,
+    metalnessMap,
     roughness: theme.roughness,
     map,
     roughnessMap,
     normalMap,
-    normalScale: new THREE.Vector2(theme.style === "lava" ? 1.6 : 1.1, theme.style === "lava" ? 1.6 : 1.1),
+    normalScale: new THREE.Vector2(0.7, 0.7),
     emissive: new THREE.Color(theme.glow),
     emissiveMap,
-    emissiveIntensity: hot
-      ? theme.style === "wet" || theme.style === "ice"
-        ? 0.45
-        : 1.2
-      : theme.style === "lava"
-        ? 0.7
-        : theme.style === "ice"
-          ? 0.2
-          : 0.35,
-    envMapIntensity: theme.envMap ?? 0.4,
-    clearcoat: theme.clearcoat,
-    clearcoatRoughness: theme.style === "ice" ? 0.05 : 0.35,
-    transmission: theme.transmission || 0,
-    ior: theme.ior || 1.5,
-    thickness: theme.thickness || 0.5,
+    emissiveIntensity: hot ? 0.72 : theme.style === "lava" ? 0.45 : 0.04,
+    envMapIntensity: theme.envMap ?? 0.34,
+    clearcoat: theme.clearcoat ?? 0.16,
+    clearcoatRoughness: 0.58,
+    clearcoatNormalMap: normalMap,
+    clearcoatNormalScale: new THREE.Vector2(0.35, 0.35),
+    transmission: theme.transmission ?? 0.08,
+    ior: theme.ior || 1.52,
+    thickness: theme.style === "ice" ? 1.8 : 1.15,
+    iridescence: 0,
+    attenuationColor: new THREE.Color("#cfc6b4").lerp(new THREE.Color(theme.body), 0.25),
+    attenuationDistance: 0.48,
   });
-  return weatherMaterial(mat, theme);
+  let h = 2166136261;
+  for (let i = 0; i < label.length; i++) {
+    h ^= label.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return weatherMaterial(mat, theme, (h >>> 0) / 4294967296);
 }
 
 function faceTangentBasis(normal) {
@@ -620,6 +792,22 @@ function faceTangentBasis(normal) {
   if (texUp.lengthSq() < 1e-8) texUp.set(1, 0, 0).projectOnPlane(n);
   texUp.normalize();
   const texRight = new THREE.Vector3().crossVectors(texUp, n).normalize();
+  texUp.crossVectors(n, texRight).normalize();
+  return { n, texUp, texRight };
+}
+
+function faceUvBasis(kind, a, b, c, normal) {
+  const n = normal.clone().normalize();
+  if (kind === "d6") return faceTangentBasis(n);
+  const up = triangleMedianUp([a.x, a.y, a.z], [b.x, b.y, b.z], [c.x, c.y, c.z]);
+  const yaw = FACE_UV_YAW[kind] || 0;
+  const spun = yaw ? rotateAround(up, [n.x, n.y, n.z], yaw) : up;
+  const texUp = new THREE.Vector3(spun[0], spun[1], spun[2]);
+  if (texUp.lengthSq() < 1e-8) return faceTangentBasis(n);
+  texUp.normalize();
+  const texRight = new THREE.Vector3().crossVectors(texUp, n);
+  if (texRight.lengthSq() < 1e-8) return faceTangentBasis(n);
+  texRight.normalize();
   texUp.crossVectors(n, texRight).normalize();
   return { n, texUp, texRight };
 }
@@ -649,13 +837,16 @@ function projectFaceUVs(geo, start, count, texUp, texRight) {
 
 function plump(geo, amount) {
   const pos = geo.attributes.position;
+  const uv = geo.attributes.uv;
   let maxR = 0;
   for (let i = 0; i < pos.count; i++) {
     maxR = Math.max(maxR, new THREE.Vector3().fromBufferAttribute(pos, i).length());
   }
   for (let i = 0; i < pos.count; i++) {
     const v = new THREE.Vector3().fromBufferAttribute(pos, i);
-    v.lerp(v.clone().setLength(maxR), amount);
+    const fromCenter = Math.hypot(uv.getX(i) - 0.5, uv.getY(i) - 0.5) / 0.46;
+    const corner = Math.pow(Math.min(1, Math.max(0, fromCenter)), 1.35);
+    v.lerp(v.clone().setLength(maxR), amount * (0.28 + 0.72 * corner));
     pos.setXYZ(i, v.x, v.y, v.z);
   }
   pos.needsUpdate = true;
@@ -694,41 +885,48 @@ function prepareFaces(kind, theme) {
   geo.clearGroups();
   const normals = [];
   const faceUps = [];
-  const values = [];
   const materials = [];
+  const starts = [];
 
   for (let f = 0; f < faceCount; f++) {
     const start = f * trisPerFace * 3;
     const count = Math.min(trisPerFace * 3, pos.count - start);
     geo.addGroup(start, count, f);
+    starts.push({ start, count });
     const a = new THREE.Vector3().fromBufferAttribute(pos, start);
     const b = new THREE.Vector3().fromBufferAttribute(pos, start + 1);
     const c = new THREE.Vector3().fromBufferAttribute(pos, start + 2);
     const n = new THREE.Vector3();
     new THREE.Triangle(a, b, c).getNormal(n);
     n.normalize();
-    const { texUp, texRight } = faceTangentBasis(n);
-    projectFaceUVs(geo, start, count, texUp, texRight);
     normals.push(n);
+  }
+
+  const values = faceValueTable(
+    kind,
+    normals.map((n) => [n.x, n.y, n.z])
+  );
+
+  for (let f = 0; f < faceCount; f++) {
+    const { start, count } = starts[f];
+    const a = new THREE.Vector3().fromBufferAttribute(pos, start);
+    const b = new THREE.Vector3().fromBufferAttribute(pos, start + 1);
+    const c = new THREE.Vector3().fromBufferAttribute(pos, start + 2);
+    const { texUp, texRight } = faceUvBasis(kind, a, b, c, normals[f]);
+    projectFaceUVs(geo, start, count, texUp, texRight);
     faceUps.push(texUp);
-    let value;
-    if (kind === "d100") value = f * 10;
-    else if (kind === "d10") value = f === 9 ? 10 : f + 1;
-    else if (kind === "d6") value = [2, 5, 3, 4, 1, 6][f];
-    else value = f + 1;
-    values.push(value);
-    materials.push(faceMaterial(formatFace(kind, value), false, theme));
+    materials.push(faceMaterial(formatFace(kind, values[f]), false, theme));
   }
 
   plump(geo, theme.style === "ice" ? 0.46 : theme.style === "lava" ? 0.34 : 0.36);
   const pos2 = geo.attributes.position;
   for (let f = 0; f < faceCount; f++) {
-    const start = f * trisPerFace * 3;
+    const start = starts[f].start;
     const a = new THREE.Vector3().fromBufferAttribute(pos2, start);
     const b = new THREE.Vector3().fromBufferAttribute(pos2, start + 1);
     const c = new THREE.Vector3().fromBufferAttribute(pos2, start + 2);
     new THREE.Triangle(a, b, c).getNormal(normals[f]).normalize();
-    const basis = faceTangentBasis(normals[f]);
+    const basis = faceUvBasis(kind, a, b, c, normals[f]);
     faceUps[f] = basis.texUp;
   }
   geo.computeVertexNormals();
@@ -740,7 +938,7 @@ function makeDieMesh(kind, theme) {
   const { geo, materials, normals, faceUps, values } = prepareFaces(kind, theme);
   const mesh = new THREE.Mesh(geo, materials);
   mesh.castShadow = true;
-  const core = new THREE.PointLight(theme.core, theme.coreGain, 6, 2);
+  const core = new THREE.PointLight(theme.core, theme.style === "lava" ? theme.coreGain : 0, 6, 2);
   mesh.add(core);
   if (theme.style === "lava") {
     const magma = new THREE.Mesh(
@@ -749,35 +947,90 @@ function makeDieMesh(kind, theme) {
     );
     mesh.add(magma);
   }
-  mesh.userData = { kind, normals, faceUps, values, materials, core };
+  mesh.userData = { kind, normals, faceUps, values, materials, core, swappedPair: null };
   return mesh;
 }
 
 export function createDiceStage(canvas, video) {
   const renderer = new THREE.WebGLRenderer({
     canvas,
+    alpha: true,
     antialias: true,
     preserveDrawingBuffer: true,
+    premultipliedAlpha: false,
     powerPreference: "high-performance",
   });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-  renderer.setClearColor(0x050302, 1);
+  renderer.setClearColor(0x000000, 0);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.08;
+  renderer.toneMappingExposure = 1.18;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  texAniso = renderer.capabilities.getMaxAnisotropy();
 
   const scene = new THREE.Scene();
   const pmrem = new THREE.PMREMGenerator(renderer);
-  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.03).texture;
-  scene.environmentIntensity = 0.32;
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0).texture;
+  scene.environmentIntensity = 0.82;
 
-  const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 80);
-  const idleCam = new THREE.Vector3(0, 1.05, 6.8);
-  const settleCam = new THREE.Vector3(0, 0.72, 4.4);
+  const IDLE_FOV = 44;
+  const DROP_FOV = 54;
+  const PRESENT_FOV = 44;
+  const TAIL_MS = 1600;
+  const camera = new THREE.PerspectiveCamera(IDLE_FOV, 1, 0.1, 80);
+  const idleCam = new THREE.Vector3(0, 8.2, 0);
+  const dropCam = new THREE.Vector3(0, 13.6, 0);
+  const settleCam = new THREE.Vector3(0, 8.2, 0);
+  const SETTLE_AIM = new THREE.Vector3(0, 0.4, 0);
+  let settleY = 0.62;
+  camera.up.set(0, 0, -1);
   camera.position.copy(idleCam);
-  camera.lookAt(0, 0.35, 0);
+  camera.lookAt(SETTLE_AIM);
+
+  const world = new CANNON.World({
+    gravity: new CANNON.Vec3(0, GRAVITY_Y, 0),
+    allowSleep: true,
+  });
+  world.broadphase = new CANNON.SAPBroadphase(world);
+  world.solver.iterations = 20;
+  world.allowSleep = true;
+  world.defaultContactMaterial.friction = 0.42;
+  world.defaultContactMaterial.restitution = 0.34;
+
+  const diceMat = new CANNON.Material("dice");
+  const tableMat = new CANNON.Material("table");
+  world.addContactMaterial(
+    new CANNON.ContactMaterial(diceMat, tableMat, {
+      friction: 0.4,
+      restitution: 0.42,
+      contactEquationStiffness: 4e6,
+      contactEquationRelaxation: 3,
+    })
+  );
+
+  function addPlane(normal, x, y, z) {
+    const body = new CANNON.Body({ mass: 0, material: tableMat });
+    body.addShape(new CANNON.Plane());
+    body.quaternion.setFromVectors(new CANNON.Vec3(0, 0, 1), new CANNON.Vec3(normal[0], normal[1], normal[2]));
+    body.position.set(x, y, z);
+    world.addBody(body);
+  }
+  addPlane([0, 1, 0], 0, 0, 0);
+  addPlane([-1, 0, 0], 1.72, 0, 0);
+  addPlane([1, 0, 0], -1.72, 0, 0);
+  addPlane([0, 0, -1], 0, 0, 1.62);
+  addPlane([0, 0, 1], 0, 0, -1.62);
+  addPlane([0, -1, 0], 0, 9.4, 0);
+
+  const catcher = new THREE.Mesh(
+    new THREE.CircleGeometry(3.4, 48),
+    new THREE.ShadowMaterial({ color: 0x000000, opacity: 0.42 })
+  );
+  catcher.rotation.x = -Math.PI / 2;
+  catcher.position.y = 0.002;
+  catcher.receiveShadow = true;
+  scene.add(catcher);
 
   const videoTex = new THREE.VideoTexture(video);
   videoTex.colorSpace = THREE.SRGBColorSpace;
@@ -787,23 +1040,30 @@ export function createDiceStage(canvas, video) {
     new THREE.PlaneGeometry(1, 1),
     new THREE.MeshBasicMaterial({ map: videoTex, depthWrite: false, side: THREE.DoubleSide })
   );
-  bg.frustumCulled = false;
-  scene.add(bg);
+  bg.visible = false;
 
-  const ambient = new THREE.AmbientLight(0x3a2a1c, 0.45);
+  const ambient = new THREE.AmbientLight(0x3a2a1c, 0.32);
   scene.add(ambient);
-  const key = new THREE.DirectionalLight(0xffd7a0, 2.6);
-  key.position.set(-2.8, 5.2, 4);
+  const key = new THREE.DirectionalLight(0xffd7a0, 3.35);
+  key.position.set(-1.15, 9.2, 2.1);
   key.castShadow = true;
-  key.shadow.mapSize.set(1024, 1024);
+  key.shadow.mapSize.set(2048, 2048);
   key.shadow.camera.near = 0.5;
-  key.shadow.camera.far = 18;
+  key.shadow.camera.far = 22;
+  key.shadow.camera.left = -5;
+  key.shadow.camera.right = 5;
+  key.shadow.camera.top = 5;
+  key.shadow.camera.bottom = -5;
+  key.shadow.bias = -0.00028;
   scene.add(key);
-  const fill = new THREE.DirectionalLight(0x6a80a8, 0.4);
-  fill.position.set(3.2, 1.2, -2);
+  const fill = new THREE.DirectionalLight(0x8aa4c4, 0.62);
+  fill.position.set(3.6, 5.4, -2.2);
   scene.add(fill);
-  const groundGlow = new THREE.SpotLight(0xffb020, 22, 14, 0.5, 0.55, 1);
-  groundGlow.position.set(0, 7, 2.4);
+  const kicker = new THREE.DirectionalLight(0xffe6c4, 0.4);
+  kicker.position.set(0.2, 2.4, 5.5);
+  scene.add(kicker);
+  const groundGlow = new THREE.SpotLight(0xffb020, 14, 16, 0.42, 0.6, 1);
+  groundGlow.position.set(0.15, 8.2, 1.1);
   groundGlow.target.position.set(0, 0, 0);
   scene.add(groundGlow);
   scene.add(groundGlow.target);
@@ -827,22 +1087,32 @@ export function createDiceStage(canvas, video) {
   function setupComposer() {
     composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
-    bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.42, 0.55, 0.22);
+    bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.16, 0.42, 0.42);
     composer.addPass(bloom);
     composer.addPass(new OutputPass());
   }
   setupComposer();
 
   let die = null;
+  let dieBody = null;
+  let localVerts = [];
   let kind = "d20";
   let envName = "siege";
   let rolling = false;
   let heatedIndex = -1;
   let settleRoll = null;
+  let rollState = null;
   let camTween = 0;
+  let lastTick = performance.now();
+  const PHYS_STEP = 1 / 60;
   const rolls = createRollController();
   let camFrom = idleCam.clone();
   let camTo = idleCam.clone();
+  const followCam = new THREE.Vector3();
+  const actionCam = new THREE.Vector3();
+  const lookAt = new THREE.Vector3();
+  let fovFrom = IDLE_FOV;
+  let fovTo = IDLE_FOV;
 
   function theme() {
     return THEMES[envName] || THEMES.siege;
@@ -853,39 +1123,29 @@ export function createDiceStage(canvas, video) {
     key.color.set(t.key);
     fill.color.set(t.fill);
     groundGlow.color.set(t.spot);
-    groundGlow.intensity = t.style === "lava" ? 34 : t.style === "ice" ? 16 : 22;
-    bloom.strength = t.style === "lava" ? 0.42 : t.style === "wet" ? 0.16 : t.style === "ice" ? 0.22 : 0.3;
-    bloom.threshold = t.style === "lava" ? 0.4 : 0.48;
+    groundGlow.intensity = t.style === "lava" ? 34 : t.style === "ice" ? 16 : 12;
+    bloom.strength = t.style === "lava" ? 0.22 : 0.08;
+    bloom.threshold = t.style === "lava" ? 0.38 : 0.55;
     renderer.toneMappingExposure = t.style === "lava" ? 1.18 : 1.08;
+    catcher.material.opacity = t.style === "ice" ? 0.22 : t.style === "lava" ? 0.45 : 0.32;
+    key.intensity = t.style === "lava" ? 3.1 : 2.6;
+    scene.environmentIntensity = 0.72;
   }
 
   function fitBackground() {
-    const dist = 18;
-    const fwd = new THREE.Vector3();
-    camera.getWorldDirection(fwd);
-    bg.position.copy(camera.position).addScaledVector(fwd, dist);
-    bg.lookAt(camera.position);
-
-    const viewH = 2 * Math.tan((camera.fov * Math.PI) / 360) * dist;
-    const viewW = viewH * camera.aspect;
-    const videoAspect =
-      video.videoWidth > 0 && video.videoHeight > 0 ? video.videoWidth / video.videoHeight : 16 / 9;
-    let w = viewW;
-    let h = w / videoAspect;
-    if (h < viewH) {
-      h = viewH;
-      w = h * videoAspect;
-    }
-    bg.scale.set(w * 1.01, h * 1.01, 1);
+    const pan = theme().filmPan || 0;
+    video.style.objectPosition = pan ? `${Math.round(50 - pan * 80)}% 50%` : "50% 50%";
   }
 
   function applyFraming() {
     const portrait = camera.aspect < 0.86;
-    idleCam.set(0, portrait ? 1.22 : 1.05, portrait ? 8.6 : 6.8);
-    settleCam.set(0, portrait ? 0.88 : 0.72, portrait ? 5.6 : 4.4);
+    idleCam.set(0, portrait ? 9.2 : 8.2, 0);
+    dropCam.set(0, portrait ? 15.2 : 13.6, 0);
+    settleCam.copy(idleCam);
     if (!rolling) {
-      camera.position.copy(idleCam);
-      camera.lookAt(0, 0.35, 0);
+      camera.fov = IDLE_FOV;
+      camera.updateProjectionMatrix();
+      lookDown(idleCam);
     }
   }
 
@@ -905,6 +1165,11 @@ export function createDiceStage(canvas, video) {
   video.addEventListener("loadedmetadata", fitBackground);
 
   function disposeDie() {
+    if (dieBody) {
+      world.removeBody(dieBody);
+      dieBody = null;
+    }
+    localVerts = [];
     if (!die) return;
     scene.remove(die);
     die.geometry.dispose();
@@ -913,6 +1178,7 @@ export function createDiceStage(canvas, video) {
       mat.emissiveMap?.dispose();
       mat.normalMap?.dispose();
       mat.roughnessMap?.dispose();
+      mat.metalnessMap?.dispose();
       mat.dispose();
     }
     die.userData.cage?.geometry.dispose();
@@ -920,12 +1186,83 @@ export function createDiceStage(canvas, video) {
     die = null;
   }
 
+  function makeDieBody(mesh) {
+    const hull = uniqueVertsAndFaces(mesh.geometry.attributes.position.array, 3);
+    localVerts = hull.vertices;
+    let shape;
+    if (kind === "d6") {
+      mesh.geometry.computeBoundingBox();
+      const size = mesh.geometry.boundingBox.getSize(new THREE.Vector3()).multiplyScalar(DIE_SCALE * 0.5);
+      shape = new CANNON.Box(new CANNON.Vec3(size.x, size.y, size.z));
+    } else if (hull.vertices.length >= 4 && hull.faces.length >= 4) {
+      shape = new CANNON.ConvexPolyhedron({
+        vertices: hull.vertices.map((v) => new CANNON.Vec3(v[0] * DIE_SCALE, v[1] * DIE_SCALE, v[2] * DIE_SCALE)),
+        faces: hull.faces,
+      });
+    } else {
+      mesh.geometry.computeBoundingSphere();
+      shape = new CANNON.Sphere((mesh.geometry.boundingSphere?.radius || 0.7) * DIE_SCALE);
+    }
+    dieBody = new CANNON.Body({
+      mass: 0.34,
+      material: diceMat,
+      allowSleep: true,
+      sleepSpeedLimit: 0.22,
+      sleepTimeLimit: 0.55,
+      linearDamping: 0.012,
+      angularDamping: 0.035,
+    });
+    dieBody.addShape(shape);
+    dieBody.ccdSpeedThreshold = 1.2;
+    dieBody.ccdSweptSphereRadius = 0.28;
+    world.addBody(dieBody);
+  }
+
+  function sitDefaultFace() {
+    if (!die) return;
+    const idx = landedIndex(die);
+    const q = restQuaternionForFace(die, idx, settleCam);
+    const y = Math.max(0.08, restOffsetY(localVerts, [q.x, q.y, q.z, q.w], DIE_SCALE) - 0.02);
+    settleY = y;
+    sitOnTable([q.x, q.y, q.z, q.w]);
+  }
+
+  function sitOnTable(quat) {
+    if (!die) return;
+    const q = quat || [die.quaternion.x, die.quaternion.y, die.quaternion.z, die.quaternion.w];
+    die.quaternion.set(q[0], q[1], q[2], q[3]);
+    die.position.set(0, settleY, 0);
+    if (dieBody) {
+      dieBody.velocity.setZero();
+      dieBody.angularVelocity.setZero();
+      dieBody.position.set(0, settleY, 0);
+      dieBody.quaternion.set(q[0], q[1], q[2], q[3]);
+      dieBody.sleep();
+    }
+    updateBlob(die);
+  }
+
+  function updateBlob(mesh) {
+    if (!mesh) return;
+    shadow.position.x = mesh.position.x;
+    shadow.position.z = mesh.position.z;
+    const h = Math.max(0, mesh.position.y);
+    shadow.scale.setScalar(0.72 + h * 0.22);
+    shadow.material.opacity = Math.max(0.06, 0.22 - h * 0.05);
+  }
+
   function abortRoll() {
     rolls.cancel();
     rolling = false;
+    rollState = null;
     const done = settleRoll;
     settleRoll = null;
-    done?.();
+    if (die) {
+      coolFaces(die);
+      restoreSwappedFaces(die);
+      sitDefaultFace();
+    }
+    done?.(null);
   }
 
   function rebuild() {
@@ -935,10 +1272,11 @@ export function createDiceStage(canvas, video) {
     const t = theme();
     applyLights(t);
     die = makeDieMesh(kind, t);
-    die.scale.setScalar(0.62);
-    die.position.set(0, 0.44, 0);
+    die.scale.setScalar(DIE_SCALE);
     scene.add(die);
-    camera.position.copy(idleCam);
+    makeDieBody(die);
+    sitDefaultFace();
+    lookDown(idleCam);
     camFrom.copy(idleCam);
     camTo.copy(idleCam);
     fitBackground();
@@ -970,141 +1308,479 @@ export function createDiceStage(canvas, video) {
     old.dispose();
   }
 
-  function heatFace(target, index, label) {
-    swapFace(target, index, label, true);
+  function setFaceFocus(mesh, keepIndex, u) {
+    if (!mesh?.material) return;
+    const mats = mesh.material;
+    const t = theme();
+    const winGlow = t.style === "lava" ? 0.7 : 0.62;
+    for (let i = 0; i < mats.length; i++) {
+      const mat = mats[i];
+      if (i === keepIndex) {
+        mat.color.setRGB(1, 1, 1);
+        mat.emissiveIntensity = 0.08 + winGlow * u;
+      } else {
+        const d = 1 - 0.9 * u;
+        mat.color.setRGB(0.16 * d, 0.13 * d, 0.11 * d);
+        mat.emissiveIntensity = 0.02 * (1 - u);
+      }
+    }
+  }
+
+  function heatFace(target, index) {
     heatedIndex = index;
+    setFaceFocus(target, index, 1);
   }
 
   function coolFaces(target) {
-    if (!target || heatedIndex < 0) return;
-    const value = target.userData.values[heatedIndex];
-    swapFace(target, heatedIndex, formatFace(kind, value), false);
+    if (!target?.material) {
+      heatedIndex = -1;
+      return;
+    }
+    const t = theme();
+    const base = t.style === "lava" ? 0.45 : 0.04;
+    for (const mat of target.material) {
+      mat.color.setRGB(1, 1, 1);
+      mat.emissiveIntensity = base;
+    }
     heatedIndex = -1;
   }
 
-  function quaternionForFace(target, index, camPos) {
+  function sitY(quat) {
+    return Math.max(0.08, restOffsetY(localVerts, [quat.x, quat.y, quat.z, quat.w], DIE_SCALE) - 0.02);
+  }
+
+  function restQuaternionForFace(target, index, camPos) {
     const n = target.userData.normals[index].clone().normalize();
     const texUp = target.userData.faceUps[index].clone().normalize();
-    const eye = camPos || camera.position;
-    const worldN = new THREE.Vector3().subVectors(eye, target.position).normalize();
-    const worldUp = camera.up.clone().projectOnPlane(worldN);
-    if (worldUp.lengthSq() < 1e-8) worldUp.set(1, 0, 0).projectOnPlane(worldN);
-    worldUp.normalize();
+    const aim = new THREE.Vector3(0, 0.22, 0);
+    const worldN = (camPos || settleCam).clone().sub(aim);
+    if (Math.abs(worldN.x) < 0.08 && Math.abs(worldN.z) < 0.08) worldN.set(0, 1, 0);
+    worldN.normalize();
     const qn = new THREE.Quaternion().setFromUnitVectors(n, worldN);
     const upNow = texUp.clone().applyQuaternion(qn).projectOnPlane(worldN);
     if (upNow.lengthSq() < 1e-8) return qn;
     upNow.normalize();
-    return new THREE.Quaternion().setFromUnitVectors(upNow, worldUp).multiply(qn);
+    const desired = camera.up.clone().projectOnPlane(worldN);
+    if (desired.lengthSq() < 1e-8) desired.set(0, 0, -1).projectOnPlane(worldN);
+    desired.normalize();
+    return new THREE.Quaternion().setFromUnitVectors(upNow, desired).multiply(qn);
   }
 
-  function faceIndexFor(target, value) {
-    const index = target.userData.values.findIndex((v) => v === value);
-    return index < 0 ? 0 : index;
+  function meshNormals(mesh) {
+    return mesh.userData.normals.map((n) => [n.x, n.y, n.z]);
   }
 
-  function rollTo(value) {
+  function meshQuat(mesh) {
+    return [mesh.quaternion.x, mesh.quaternion.y, mesh.quaternion.z, mesh.quaternion.w];
+  }
+
+  function landedIndex(mesh) {
+    return upwardFaceIndex(meshNormals(mesh), meshQuat(mesh), [0, 1, 0]);
+  }
+
+  function restoreSwappedFaces(mesh) {
+    const pair = mesh?.userData?.swappedPair;
+    if (!pair) return;
+    swapDieFaces(mesh, pair[0], pair[1]);
+    mesh.userData.swappedPair = null;
+  }
+
+  function swapDieFaces(mesh, i, j) {
+    if (i === j || i < 0 || j < 0) return;
+    const values = mesh.userData.values;
+    const mats = mesh.userData.materials;
+    const tv = values[i];
+    values[i] = values[j];
+    values[j] = tv;
+    const tm = mats[i];
+    mats[i] = mats[j];
+    mats[j] = tm;
+    mesh.material[i] = mats[i];
+    mesh.material[j] = mats[j];
+  }
+
+  function applyForcedFace(mesh, force) {
+    if (force == null) return;
+    const values = mesh.userData.values;
+    const idx = landedIndex(mesh);
+    const j = values.indexOf(force);
+    if (j < 0 || j === idx) return;
+    swapDieFaces(mesh, idx, j);
+    mesh.userData.swappedPair = [idx, j];
+  }
+
+  function captureLanded(st) {
+    const mesh = st.mesh;
+    st.index = landedIndex(mesh);
+    st.value = landedValue(meshNormals(mesh), meshQuat(mesh), mesh.userData.values, [0, 1, 0]);
+    st.label = formatFace(kind, st.value);
+    if (!st.fromQ) st.fromQ = new THREE.Quaternion();
+    if (!st.fromP) st.fromP = new THREE.Vector3();
+    if (!st.holdQ) st.holdQ = new THREE.Quaternion();
+    if (!st.presentQ) st.presentQ = new THREE.Quaternion();
+    if (!st.flatP) st.flatP = new THREE.Vector3();
+    if (!st.toP) st.toP = new THREE.Vector3();
+    st.fromQ.copy(mesh.quaternion);
+    st.fromP.copy(mesh.position);
+    st.presentQ.copy(restQuaternionForFace(mesh, st.index, settleCam));
+    st.holdQ.copy(st.presentQ);
+    st.flatP.set(0, settleY, 0);
+    st.toP.set(0, settleY, 0);
+  }
+
+  function freezeBody(quat, pos) {
+    if (!dieBody) return;
+    dieBody.velocity.setZero();
+    dieBody.angularVelocity.setZero();
+    if (quat) dieBody.quaternion.set(quat.x, quat.y, quat.z, quat.w);
+    if (pos) dieBody.position.set(pos.x, pos.y, pos.z);
+    dieBody.allowSleep = true;
+    dieBody.sleep();
+  }
+
+  function reducedMotion() {
+    return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+
+  function setFov(fov) {
+    camera.fov = fov;
+    camera.updateProjectionMatrix();
+  }
+
+  function lookDown(pos, tx = 0, tz = 0) {
+    camera.up.set(0, 0, -1);
+    if (pos) camera.position.copy(pos);
+    camera.lookAt(tx, SETTLE_AIM.y, tz);
+  }
+
+  function lockSettleFrame(mesh, quat) {
+    mesh.quaternion.copy(quat);
+    mesh.position.set(0, settleY, 0);
+    freezeBody(quat, mesh.position);
+    camera.up.set(0, 0, -1);
+    camera.position.copy(settleCam);
+    camera.lookAt(SETTLE_AIM);
+    setFov(PRESENT_FOV);
+    updateBlob(mesh);
+  }
+
+  function beginAlign(st, now) {
+    st.phase = "align";
+    st.snapT0 = now;
+    camFrom.copy(camera.position);
+    camTo.copy(settleCam);
+    fovFrom = camera.fov;
+    fovTo = PRESENT_FOV;
+    camTween += 1;
+    freezeBody(st.fromQ, st.fromP);
+    heatedIndex = st.index;
+    setFaceFocus(st.mesh, st.index, 0);
+  }
+
+  function finishLanding(st, now) {
+    captureLanded(st);
+    beginAlign(st, now);
+  }
+
+  function finishRoll(st) {
+    if (!st) return;
+    const mesh = st.mesh;
+    lockSettleFrame(mesh, st.presentQ);
+    heatFace(mesh, st.index);
+    sitOnTable([st.presentQ.x, st.presentQ.y, st.presentQ.z, st.presentQ.w]);
+    lockSettleFrame(mesh, st.presentQ);
+    st.finish(st.value);
+  }
+
+  function keepInFrame(mesh, outPos) {
+    const x = mesh.position.x;
+    const y = Math.max(0, mesh.position.y);
+    const z = mesh.position.z;
+    const spread = Math.hypot(x, z);
+    const camY = Math.max(dropCam.y, y * 2.6 + 5.2, spread * 3.5 + 6.2);
+    outPos.set(x * 0.05, camY, z * 0.05);
+    return {
+      lx: x * 0.12,
+      lz: z * 0.12,
+      fov: Math.min(62, DROP_FOV + y * 2.4 + spread * 3.2),
+    };
+  }
+
+  function trackFlight(mesh) {
+    const cover = keepInFrame(mesh, followCam);
+    camera.position.lerp(followCam, 0.22);
+    setFov(camera.fov + (cover.fov - camera.fov) * 0.22);
+    lookDown(camera.position, cover.lx, cover.lz);
+  }
+
+  function stepPhysics(dt) {
+    const sim = Math.min(1 / 48, Math.max(1 / 240, dt));
+    world.step(sim);
+  }
+
+  function beginHold(st, now) {
+    lockSettleFrame(st.mesh, st.presentQ);
+    st.phase = "hold";
+    st.snapT0 = now;
+    st.heated = true;
+    heatFace(st.mesh, st.index);
+    st.report?.(st.value);
+  }
+
+  function snapshotBody() {
+    const p = dieBody.position;
+    const q = dieBody.quaternion;
+    const v = dieBody.velocity;
+    const w = dieBody.angularVelocity;
+    return {
+      p: { x: p.x, y: p.y, z: p.z },
+      q: { x: q.x, y: q.y, z: q.z, w: q.w },
+      v: { x: v.x, y: v.y, z: v.z },
+      w: { x: w.x, y: w.y, z: w.z },
+    };
+  }
+
+  function readFrame() {
+    const snap = snapshotBody();
+    return { p: snap.p, q: snap.q, lin: [snap.v.x, snap.v.y, snap.v.z], ang: [snap.w.x, snap.w.y, snap.w.z] };
+  }
+
+  function restoreBody(snap) {
+    dieBody.allowSleep = false;
+    dieBody.wakeUp();
+    dieBody.position.set(snap.p.x, snap.p.y, snap.p.z);
+    dieBody.quaternion.set(snap.q.x, snap.q.y, snap.q.z, snap.q.w);
+    dieBody.velocity.set(snap.v.x, snap.v.y, snap.v.z);
+    dieBody.angularVelocity.set(snap.w.x, snap.w.y, snap.w.z);
+  }
+
+  function applyFrame(mesh, f) {
+    mesh.position.set(f.p.x, f.p.y, f.p.z);
+    mesh.quaternion.set(f.q.x, f.q.y, f.q.z, f.q.w);
+    dieBody.position.set(f.p.x, f.p.y, f.p.z);
+    dieBody.quaternion.set(f.q.x, f.q.y, f.q.z, f.q.w);
+  }
+
+  function applyThrow(mesh) {
+    const pose = throwPose();
+    const spin = new THREE.Quaternion().setFromEuler(
+      new THREE.Euler(Math.random() * Math.PI * 2, Math.random() * Math.PI * 2, Math.random() * Math.PI * 2)
+    );
+    dieBody.allowSleep = false;
+    dieBody.wakeUp();
+    dieBody.position.set(pose.position[0], pose.position[1], pose.position[2]);
+    dieBody.velocity.set(pose.velocity[0], pose.velocity[1], pose.velocity[2]);
+    dieBody.angularVelocity.set(pose.angularVelocity[0], pose.angularVelocity[1], pose.angularVelocity[2]);
+    dieBody.quaternion.set(spin.x, spin.y, spin.z, spin.w);
+    mesh.position.copy(dieBody.position);
+    mesh.quaternion.copy(dieBody.quaternion);
+    return snapshotBody();
+  }
+
+  function stepUntilSleep(mesh) {
+    let ms = 0;
+    while (ms < FLIGHT_MAX_MS) {
+      world.step(PHYS_STEP);
+      ms += PHYS_STEP * 1000;
+      const lin = dieBody.velocity;
+      const ang = dieBody.angularVelocity;
+      if (isSleepy([lin.x, lin.y, lin.z], [ang.x, ang.y, ang.z])) break;
+    }
+    mesh.position.copy(dieBody.position);
+    mesh.quaternion.copy(dieBody.quaternion);
+  }
+
+  function simulateTrajectory() {
+    const frames = [readFrame()];
+    let ms = 0;
+    while (ms < FLIGHT_MAX_MS) {
+      world.step(PHYS_STEP);
+      ms += PHYS_STEP * 1000;
+      frames.push(readFrame());
+      if (isSleepy(frames[frames.length - 1].lin, frames[frames.length - 1].ang)) break;
+    }
+    return frames;
+  }
+
+  function stepRoll(dt, now) {
+    const st = rollState;
+    if (!st) return;
+    if (!st.live()) {
+      st.finish(null);
+      return;
+    }
+    const mesh = st.mesh;
+    if (st.phase === "flight") {
+      if (!st.replay || !st.replay.length) {
+        stepPhysics(dt);
+        mesh.position.copy(dieBody.position);
+        mesh.quaternion.copy(dieBody.quaternion);
+        trackFlight(mesh);
+        if (isSleepy([dieBody.velocity.x, dieBody.velocity.y, dieBody.velocity.z], [dieBody.angularVelocity.x, dieBody.angularVelocity.y, dieBody.angularVelocity.z]) || now - st.t0 >= FLIGHT_MAX_MS) {
+          finishLanding(st, now);
+        }
+        updateBlob(mesh);
+        return;
+      }
+      const frames = st.replay;
+      const last = frames.length - 1;
+      const frame = frames[Math.min(st.replayI, last)];
+      const scale = slowMoScale(Math.hypot(...frame.lin), Math.hypot(...frame.ang), now - st.t0);
+      st.replayT += dt * scale;
+      st.replayI = Math.min(last, Math.floor(st.replayT / PHYS_STEP));
+      const i = st.replayI;
+      applyFrame(mesh, frames[i]);
+      const span = Math.max(1, last - st.tailStart);
+      const u = i <= st.tailStart ? 0 : smoothProgress(i - st.tailStart, span);
+      const cover = keepInFrame(mesh, followCam);
+      actionCam.lerpVectors(followCam, settleCam, u);
+      camera.position.lerp(actionCam, u > 0 ? 0.28 : 0.22);
+      setFov(camera.fov + ((cover.fov + (PRESENT_FOV - cover.fov) * u) - camera.fov) * 0.28);
+      lookDown(camera.position, cover.lx * (1 - u), cover.lz * (1 - u));
+      st.fromP.set(frames[i].p.x, frames[i].p.y, frames[i].p.z);
+      st.fromQ.set(frames[i].q.x, frames[i].q.y, frames[i].q.z, frames[i].q.w);
+      if (u <= 0) {
+        mesh.position.copy(st.fromP);
+        mesh.quaternion.copy(st.fromQ);
+      } else {
+        mesh.position.lerpVectors(st.fromP, st.toP, u);
+        mesh.quaternion.slerpQuaternions(st.fromQ, st.presentQ, u);
+        setFaceFocus(mesh, st.index, u);
+      }
+      updateBlob(mesh);
+      if (i >= last) beginHold(st, now);
+      return;
+    }
+    if (st.phase === "hold") {
+      lockSettleFrame(mesh, st.presentQ);
+      if (now - st.snapT0 >= HOLD_MS) finishRoll(st);
+      return;
+    }
+    finishRoll(st);
+  }
+
+  function parseForce(opts, values) {
+    const n = opts && typeof opts === "object" ? opts.force : undefined;
+    if (n == null || !values.includes(n)) return null;
+    return n;
+  }
+
+  function emptyRollState(mesh, session, finish, force, report) {
+    return {
+      phase: "flight",
+      session,
+      mesh,
+      force,
+      index: -1,
+      value: null,
+      label: "",
+      t0: performance.now(),
+      snapT0: 0,
+      fromQ: new THREE.Quaternion(),
+      fromP: new THREE.Vector3(),
+      holdQ: new THREE.Quaternion(),
+      presentQ: new THREE.Quaternion(),
+      flatP: new THREE.Vector3(),
+      toP: new THREE.Vector3(),
+      replay: null,
+      replayI: 0,
+      replayT: 0,
+      tailStart: 0,
+      heated: false,
+      live: () => session.isLive() && die === mesh,
+      report,
+      finish,
+    };
+  }
+
+  function roll(opts = {}) {
     abortRoll();
-    if (!die) return Promise.resolve();
+    if (!die || !dieBody) return Promise.resolve(null);
     coolFaces(die);
+    restoreSwappedFaces(die);
     rolling = true;
     const session = rolls.start();
     const mesh = die;
-    const label = formatFace(kind, value);
-    const index = faceIndexFor(mesh, value);
-    let heated = false;
-
-    const start = mesh.quaternion.clone();
-    const axis = new THREE.Vector3(Math.random() * 0.7 + 0.2, Math.random() + 0.35, Math.random() * 0.8 + 0.1).normalize();
-    const tumbleAngle = 19 + Math.random() * 8;
-    const coastT = 0.82;
-    const qCoast = start.clone().premultiply(new THREE.Quaternion().setFromAxisAngle(axis, tumbleAngle * coastT));
-    const duration = 3200;
-    const t0 = performance.now();
-    camTween += 1;
-    camFrom.copy(camera.position);
-    camTo.copy(settleCam);
+    const force = parseForce(opts, mesh.userData.values);
 
     return new Promise((resolve) => {
       let settled = false;
-      const finish = () => {
+      const report = (value = null) => {
         if (settled) return;
         settled = true;
+        resolve(value);
+      };
+      const finish = (value = null) => {
         if (settleRoll === finish) settleRoll = null;
         rolling = false;
-        resolve();
+        rollState = null;
+        report(value);
       };
       settleRoll = finish;
 
-      function live() {
-        return session.isLive() && die === mesh;
+      if (reducedMotion()) {
+        applyThrow(mesh);
+        stepUntilSleep(mesh);
+        applyForcedFace(mesh, force);
+        const st = emptyRollState(mesh, session, finish, force, report);
+        captureLanded(st);
+        heatFace(mesh, st.index);
+        camTween += 1;
+        lockSettleFrame(mesh, st.presentQ);
+        finish(st.value);
+        return;
       }
 
-      function frame(now) {
-        if (!live()) {
-          finish();
-          return;
-        }
-        const t = Math.min(1, (now - t0) / duration);
-        const hop = Math.abs(Math.sin(t * Math.PI * 3.05)) * (1 - t) * (1 - t) * 1.45;
-        mesh.position.y = 0.44 + hop * 0.75;
-        mesh.position.x = Math.sin(t * 10.5) * 0.07 * (1 - t);
-        mesh.position.z = Math.cos(t * 8.2) * 0.05 * (1 - t);
-        shadow.scale.setScalar(1.2 - hop * 0.28);
-        shadow.material.opacity = 0.16 + (1 - hop) * 0.18;
-
-        if (t < coastT) {
-          mesh.quaternion.copy(start).premultiply(new THREE.Quaternion().setFromAxisAngle(axis, tumbleAngle * t));
-        } else {
-          const u = (t - coastT) / (1 - coastT);
-          const e = 1 - (1 - u) ** 3;
-          const rest = quaternionForFace(mesh, index, camera.position);
-          mesh.quaternion.copy(qCoast).slerp(rest, e);
-        }
-
-        if (!heated && t >= 0.97) {
-          heatFace(mesh, index, label);
-          heated = true;
-        }
-
-        const ce = t < 0.6 ? 0 : 1 - (1 - (t - 0.6) / 0.4) ** 2;
-        camera.position.lerpVectors(camFrom, camTo, ce);
-        camera.lookAt(0, 0.34 + (1 - ce) * 0.08, 0);
-        fitBackground();
-
-        if (t < 1) requestAnimationFrame(frame);
-        else {
-          mesh.position.set(0, 0.44, 0);
-          mesh.quaternion.copy(quaternionForFace(mesh, index, camera.position));
-          if (!heated) heatFace(mesh, index, label);
-          finish();
-        }
-      }
-      requestAnimationFrame(frame);
+      applyThrow(mesh);
+      const origin = snapshotBody();
+      const replay = simulateTrajectory();
+      applyFrame(mesh, replay[replay.length - 1]);
+      applyForcedFace(mesh, force);
+      camTween += 1;
+      const st = emptyRollState(mesh, session, finish, force, report);
+      captureLanded(st);
+      restoreBody(origin);
+      mesh.position.copy(dieBody.position);
+      mesh.quaternion.copy(dieBody.quaternion);
+      const tailN = Math.min(replay.length - 1, Math.max(36, Math.round(TAIL_MS / 1000 / PHYS_STEP)));
+      st.replay = replay;
+      st.tailStart = Math.max(0, replay.length - 1 - tailN);
+      lookDown(dropCam);
+      setFov(DROP_FOV);
+      rollState = st;
     });
+  }
+
+  function rollForced(n) {
+    return roll({ force: n });
   }
 
   function resetCamera() {
     const id = ++camTween;
     camFrom.copy(camera.position);
     camTo.copy(idleCam);
+    fovFrom = camera.fov;
+    fovTo = IDLE_FOV;
     const t0 = performance.now();
     function frame(now) {
       if (id !== camTween) return;
       const t = Math.min(1, (now - t0) / 700);
       camera.position.lerpVectors(camFrom, camTo, t);
-      camera.lookAt(0, 0.35, 0);
-      fitBackground();
+      setFov(fovFrom + (fovTo - fovFrom) * t);
+      lookDown(camera.position);
       if (t < 1) requestAnimationFrame(frame);
     }
     requestAnimationFrame(frame);
   }
 
-  function tick() {
+  function tick(now = performance.now()) {
+    const dt = Math.min(0.05, (now - lastTick) / 1000);
+    lastTick = now;
+    if (rollState) stepRoll(dt, now);
     if (die && theme().style === "lava") {
-      die.userData.core.intensity = theme().coreGain * (0.88 + Math.sin(performance.now() * 0.007) * 0.18);
+      die.userData.core.intensity = theme().coreGain * (0.88 + Math.sin(now * 0.007) * 0.18);
     }
-    videoTex.needsUpdate = true;
-    fitBackground();
+    renderer.setClearColor(0x000000, 0);
     composer.render();
     requestAnimationFrame(tick);
   }
@@ -1118,5 +1794,25 @@ export function createDiceStage(canvas, video) {
   tick();
   rebuild();
 
-  return { setKind, setTheme, rollTo, abortRoll, resetCamera, resize, snapshot };
+  return {
+    setKind,
+    setTheme,
+    roll,
+    rollForced,
+    abortRoll,
+    resetCamera,
+    resize,
+    snapshot,
+    debug() {
+      return {
+        phase: rollState?.phase || (rolling ? "rolling" : "idle"),
+        y: die ? +die.position.y.toFixed(3) : null,
+        value: rollState?.value ?? null,
+        fov: +camera.fov.toFixed(2),
+        camY: +camera.position.y.toFixed(3),
+        cam: [+camera.position.x.toFixed(2), +camera.position.y.toFixed(2), +camera.position.z.toFixed(2)],
+        up: [+camera.up.x.toFixed(2), +camera.up.y.toFixed(2), +camera.up.z.toFixed(2)],
+      };
+    },
+  };
 }

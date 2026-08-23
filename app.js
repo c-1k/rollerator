@@ -1,7 +1,6 @@
-import { DICE, createDiceStage } from "./dice3d.js";
-import { rollFair } from "./roll-engine.js";
-import { pickHortQuote } from "./quotes.js";
-import { composeShareStill } from "./share-card.js";
+import { createDiceStage, formatFace } from "./dice3d.js?v=cine-wide2";
+import { pickHortQuote } from "./quotes.js?v=cine-wide2";
+import { composeShareStill } from "./share-card.js?v=cine-wide2";
 
 const envFilm = document.querySelector("#env-film");
 const form = document.querySelector("#war-table");
@@ -15,6 +14,7 @@ const hortLine = document.querySelector(".hort-line");
 const hortContext = document.querySelector(".hort-context");
 const muteBtn = document.querySelector("#mute");
 const dice = createDiceStage(document.querySelector("#die-stage"), envFilm);
+window.__dice = dice;
 
 let lastResult = null;
 let actionId = 0;
@@ -22,7 +22,7 @@ let envWait = null;
 let userMuted = localStorage.getItem("rollerator-mute") === "1";
 
 function mediaUrl(id) {
-  return `public/env/${id}.mp4`;
+  return `public/env/${id}.mp4?v=2`;
 }
 
 function tap() {
@@ -48,14 +48,14 @@ function playEnv(id, { loop, muted }) {
       resolve();
     };
     envWait = finish;
-    const timer = setTimeout(finish, 6500);
+    const timer = setTimeout(finish, 12000);
     envFilm.addEventListener("ended", finish, { once: true });
     envFilm.addEventListener("error", finish, { once: true });
     envFilm.addEventListener("abort", finish, { once: true });
-    envFilm.poster = `public/posters/${id}.jpg`;
+    envFilm.poster = `public/posters/${id}.jpg?v=2`;
     envFilm.loop = loop;
     envFilm.muted = userMuted || muted;
-    if (envFilm.src.endsWith(`/${id}.mp4`) && envFilm.readyState >= 2) {
+    if (envFilm.src.includes(`/${id}.mp4`) && envFilm.readyState >= 2) {
       envFilm.currentTime = 0;
     } else {
       envFilm.src = mediaUrl(id);
@@ -115,8 +115,6 @@ form.addEventListener("submit", async (event) => {
   tap();
   const env = envSelect.value;
   const kind = dieSelect.value;
-  const spec = DICE[kind];
-  const value = rollFair(spec.min, spec.min + spec.sides - 1);
   const id = ++actionId;
 
   lastResult = null;
@@ -126,15 +124,16 @@ form.addEventListener("submit", async (event) => {
   try {
     dice.setKind(kind, env);
     const envPlay = playEnv(env, { loop: false, muted: false });
-    const diePlay = dice.rollTo(value);
-    await Promise.all([envPlay, diePlay]);
+    const diePlay = dice.roll();
+    const [, value] = await Promise.all([envPlay, diePlay]);
     if (id !== actionId) return;
+    if (value == null) return;
     envFilm.loop = true;
     envFilm.muted = true;
     envFilm.play().catch(() => playEnv(env, { loop: true, muted: true }));
     syncMuteButton();
     const hort = pickHortQuote(kind, value);
-    hortRoll.textContent = `${kind}  ·  ${value}`;
+    hortRoll.textContent = `${kind}  ·  ${formatFace(kind, value)}`;
     hortLine.textContent = `“${hort.line}”`;
     hortContext.textContent = hort.context;
     hortBox.hidden = false;
