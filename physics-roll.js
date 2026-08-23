@@ -1,26 +1,31 @@
 /**
  * The throw profile. Every tunable of the hand throw lives here so it can be
- * unit-tested and tuned in one place. Units are world units (the die is
- * DIE_SCALE = 0.72 across; the tray is 3.44 x 3.24), seconds, radians.
+ * unit-tested and tuned in one place. Units are world units, seconds,
+ * radians. Scale matters here and is easy to get wrong: DIE_SCALE = 0.72 is
+ * a SCALE FACTOR on geometry of circumradius 1.12-1.22, so the die's
+ * circumradius is ~0.72-0.83 and it is ~1.6 units ACROSS -- roughly half the
+ * width of the 3.44 x 3.24 tray. That ratio is why `launch.z` has to stay
+ * under ~0.78 (above it the die spawns inside the far wall at z = 1.62 and
+ * the solver ejects it) and why the die cannot travel far before it lands.
  * Values are the tuned result of the soak in the plan's Task 5.
  */
 export const THROW = {
-  gravityY: -160,
+  gravityY: -120,
   physStep: 1 / 120,
   flightMaxMs: 2500,
   launch: {
     x: [-0.5, 0.5],
-    y: [2.0, 2.6],
-    z: [1.15, 1.4],
-    vx: [-0.8, 0.8],
-    vy: [-2.0, -1.0],
-    vz: [-5.5, -4.0],
-    spin: [28, 18, 28],
+    y: [2.4, 2.9],
+    z: [0.55, 0.78],
+    vx: [-0.4, 0.4],
+    vy: [-1.0, -0.2],
+    vz: [-2.2, -1.4],
+    spin: [12, 8, 12],
   },
-  contact: { friction: 0.55, restitution: 0.28 },
+  contact: { friction: 0.45, restitution: 0.6 },
   damping: { linear: 0.06, angular: 0.12 },
   sleep: { speedLimit: 0.35, timeLimit: 0.25 },
-  rest: { lin: 0.3, ang: 0.9 },
+  rest: { lin: 0.21, ang: 0.51 },
 };
 
 export const LIN_SLEEP = THROW.rest.lin;

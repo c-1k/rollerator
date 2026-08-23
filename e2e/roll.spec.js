@@ -224,6 +224,7 @@ test("switching environment clears the previous result; resizing keeps the revea
   const dz = d.reveal.position[2] - d.landedPos[2];
   expect(
     Math.abs(Math.hypot(dx, dy, dz) - (9.2 - d.landedPos[1])),
+    "reveal must aim at the landing: eye-to-aim = 9.2 − restY",
   ).toBeLessThan(1e-2);
   const same =
     d.meshQuat[0] * d.landedQuat[0] +

@@ -1453,7 +1453,7 @@ export function createDiceStage(canvas, video) {
     };
     // Where the die came to rest, with the height for THIS pose (the old code
     // reused the idle pose's settleY for every landing).
-    const restY = Math.max(0.08, restOffsetY(localVerts, st.landedQuat, DIE_SCALE) - 0.02);
+    const restY = Math.max(0.08, restOffsetY(localVerts, st.landedQuat, DIE_SCALE));
     st.landedPos = [mesh.position.x, restY, mesh.position.z];
     st.reveal = computeReveal(mesh, st.index, st.landedQuat, st.landedPos);
     lastRoll.landedPos = st.landedPos.slice();

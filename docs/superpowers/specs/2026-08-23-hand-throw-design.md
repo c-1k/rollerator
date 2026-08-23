@@ -50,27 +50,28 @@ shadow-catcher disc (radius 3.4) already covers the whole tray.
 
 ## 4. The throw — a profile in `physics-roll.js`
 
-All tunables move into one exported, pure profile so they can be unit-tested
-and tuned in one place:
+These are the tuned values (soak of 7 × 10 rolls, 2026-08-23). All tunables
+live in one exported, pure profile so they can be unit-tested and tuned in
+one place:
 
 ```js
 export const THROW = {
-  gravityY: -160,          // was -48
+  gravityY: -120,          // was -48; the floor §8's "heavy" test allows
   physStep: 1 / 120,       // was 1/60; higher speeds need finer steps
   flightMaxMs: 2500,       // was 6800: hard cap on the silent sim
   launch: {
     x: [-0.5, 0.5],        // across the tray
-    y: [2.0, 2.6],         // was 4.7–5.45: a hand, not a drop from the ceiling
-    z: [1.15, 1.4],        // from the front edge, as now
-    vx: [-0.8, 0.8],
-    vy: [-2.0, -1.0],      // already moving down, slightly
-    vz: [-5.5, -4.0],      // was -3.5…-2.35: thrown, not dropped
-    spin: [28, 18, 28],    // ± rad/s per axis; was 34/22/34 ÷ 2 → 17/11/17
+    y: [2.4, 2.9],         // was 4.7–5.45: a hand, not a drop from the ceiling
+    z: [0.55, 0.78],       // NOT 1.15–1.4 — see "the launch box" below
+    vx: [-0.4, 0.4],
+    vy: [-1.0, -0.2],      // already moving down, slightly
+    vz: [-2.2, -1.4],      // was -3.5…-2.35: thrown, but the tray is small
+    spin: [12, 8, 12],     // ± rad/s per axis; was 34/22/34 ÷ 2 → 17/11/17
   },
-  contact: { friction: 0.55, restitution: 0.28 },   // was 0.4 / 0.42
+  contact: { friction: 0.45, restitution: 0.6 },     // was 0.4 / 0.42
   damping: { linear: 0.06, angular: 0.12 },          // was 0.012 / 0.035
   sleep: { speedLimit: 0.35, timeLimit: 0.25 },      // was 0.22 / 0.55
-  rest: { lin: 0.3, ang: 0.9 },                      // isSleepy thresholds; were 0.16 / 0.48
+  rest: { lin: 0.21, ang: 0.51 },                    // isSleepy thresholds; were 0.16 / 0.48
 };
 ```
 
@@ -80,10 +81,37 @@ nothing else has to change its imports). `dice3d.js` reads `THROW.contact`,
 `THROW.damping`, `THROW.sleep`, `THROW.physStep` where it currently has
 literals (`makeDieBody`, the `ContactMaterial`, `PHYS_STEP`).
 
-**These numbers are a starting point, not the acceptance.** §9 defines the
-acceptance as measured behaviour; the implementation plan has a tuning task
-that moves the profile until the measurements pass, and records the final
-values here.
+**The launch box.** `launch.z` looks timid next to the 1.15–1.4 the spec
+started with, and it is the most important number here. `DIE_SCALE = 0.72` is
+a *scale factor* on geometry of circumradius 1.12–1.22, so the die's
+circumradius is ~0.72–0.83 and it is **~1.6 units across, not 0.72** — §3's
+figure is wrong by about 2×. At `z = 1.4` the die's far vertex therefore
+reached `z = 2.21` against the +z wall at 1.62 and spawned 0.59 units *inside*
+it; the solver ejected it, which is where the wall-hit counts of 3–7 a roll
+came from. Holding `z ≤ 0.78` keeps every die clear at spawn and dropped mean
+wall hits to 1.5–3.0.
+
+**What the tuning reached, and what it could not.** Measured over 68 profiles;
+the final soak (`scripts/throw-soak.mjs 10`) holds these §9 bounds on all seven
+dice: p95 `flightMs` ≤ 1208 (bound 2000), `heldFrames` 0 in 70/70 rolls, every
+landing clear of the walls (max |x| 1.21, max |z| 1.20 against 1.42 / 1.32),
+and click-to-value 1130–1826 ms (bound 2200). Two bounds are **not reachable by
+any `THROW` value** and need a decision outside this profile:
+
+- **median `flightMs` 900–1700.** Reached 646–842. The die is half the tray
+  wide (above), so at `gravityY ≤ -120` the fall from the maximum legal launch
+  height takes ~0.21 s and the whole motion is bounded to ~0.5–0.9 s. Only
+  restitution buys more, and restitution multiplies contacts.
+- **`bounces` 1–4 in ≥ 90 %.** Reached 0–20 %. §7's counter increments once per
+  *contact equation*, not once per bounce: one flat d100 landing emits three
+  `collide` events in a single physics step, and this soak logged a d10 roll at
+  27. A die that bounces twice has already spent the budget. De-duplicating
+  same-step contacts narrows it (d20 12.3 → 9.5 raw → same-step at e = 0.6) but
+  does not close it.
+
+The fix for the second is in `dice3d.js`'s `onCollide`, not here; the fix for
+the first is the tray-to-die ratio. Both are recorded in
+`.superpowers/sdd/2026-08-23-hand-throw/task-5-report.md` with the measurements.
 
 ## 5. Replay: real time, interpolated
 
