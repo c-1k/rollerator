@@ -98,6 +98,23 @@ async function shareStill(file) {
   return "saved";
 }
 
+// Share is an icon now, so its feedback cannot be a label swap: writing
+// textContent would delete the inline SVG and resize the stud. The word goes
+// on a data attribute that styles.css floats above the button, which costs no
+// layout. The accessible name still changes and changes back, exactly as the
+// old text swap did.
+let shareFlashTimer = null;
+
+function flashShare(word) {
+  shareBtn.dataset.flash = word;
+  shareBtn.setAttribute("aria-label", word);
+  clearTimeout(shareFlashTimer);
+  shareFlashTimer = setTimeout(() => {
+    delete shareBtn.dataset.flash;
+    shareBtn.setAttribute("aria-label", "Share");
+  }, 1400);
+}
+
 function setIdle() {
   actionId += 1;
   lastResult = null;
@@ -165,17 +182,11 @@ shareBtn.addEventListener("click", async () => {
     });
     const mode = await shareStill(file);
     if (mode === "copied" || mode === "saved") {
-      shareBtn.textContent = mode === "copied" ? "Copied" : "Saved";
-      setTimeout(() => {
-        shareBtn.textContent = "Share";
-      }, 1400);
+      flashShare(mode === "copied" ? "Copied" : "Saved");
     }
   } catch (err) {
     if (err?.name !== "AbortError") {
-      shareBtn.textContent = "Failed";
-      setTimeout(() => {
-        shareBtn.textContent = "Share";
-      }, 1400);
+      flashShare("Failed");
     }
   } finally {
     shareBtn.disabled = false;
