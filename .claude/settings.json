@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm run test)",
+      "Bash(pnpm run lint)",
+      "Bash(pnpm run format)",
+      "Bash(pnpm run verify)",
+      "Bash(pnpm run test:visual)",
+      "Bash(pnpm run shot:*)",
+      "Bash(pnpm install)",
+      "Bash(pnpm exec playwright test:*)",
+      "Bash(pnpm exec biome check:*)",
+      "Bash(node --test)",
+      "Bash(node scripts/roll-shot.mjs:*)",
+      "Bash(node scripts/dev-server.mjs:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git worktree:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/guard-git.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

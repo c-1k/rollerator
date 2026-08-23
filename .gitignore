@@ -1,5 +1,15 @@
 .vercel
 .DS_Store
+
+# Generated assets, kept out of git by size (regenerate via jobs/)
 public/dice
 public/env/src
 public/rolls
+
+# Tooling
+node_modules/
+.worktrees/
+.artifacts/
+test-results/
+playwright-report/
+blob-report/

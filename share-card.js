@@ -2,10 +2,10 @@ async function waitFonts() {
   if (!document.fonts?.ready) return;
   await document.fonts.ready;
   await Promise.allSettled([
-    document.fonts.load("700 32px \"Cinzel Decorative\""),
+    document.fonts.load('700 32px "Cinzel Decorative"'),
     document.fonts.load("500 16px Cinzel"),
-    document.fonts.load("italic 500 22px \"Cormorant Garamond\""),
-    document.fonts.load("500 16px \"Cormorant Garamond\""),
+    document.fonts.load('italic 500 22px "Cormorant Garamond"'),
+    document.fonts.load('500 16px "Cormorant Garamond"'),
   ]);
 }
 
@@ -37,7 +37,9 @@ function mapRect(el, origin, dpr) {
 
 function paintedText(el) {
   const raw = el.textContent || "";
-  return getComputedStyle(el).textTransform === "uppercase" ? raw.toUpperCase() : raw;
+  return getComputedStyle(el).textTransform === "uppercase"
+    ? raw.toUpperCase()
+    : raw;
 }
 
 function setType(ctx, el, dpr) {
@@ -49,7 +51,10 @@ function setType(ctx, el, dpr) {
   ctx.textBaseline = "top";
   const spacing = cs.letterSpacing;
   if ("letterSpacing" in ctx) {
-    ctx.letterSpacing = spacing && spacing !== "normal" ? `${parseFloat(spacing) * dpr}px` : "0px";
+    ctx.letterSpacing =
+      spacing && spacing !== "normal"
+        ? `${parseFloat(spacing) * dpr}px`
+        : "0px";
   }
   const lineHeight =
     cs.lineHeight === "normal" ? size * 1.35 : parseFloat(cs.lineHeight) * dpr;
@@ -107,7 +112,12 @@ function drawHort(ctx, origin, dpr, canvasH) {
   ctx.fillRect(box.x, box.y, box.w, box.h);
   ctx.strokeStyle = "rgba(227, 154, 58, 0.35)";
   ctx.lineWidth = Math.max(1, dpr);
-  ctx.strokeRect(box.x + ctx.lineWidth / 2, box.y + ctx.lineWidth / 2, box.w - ctx.lineWidth, box.h - ctx.lineWidth);
+  ctx.strokeRect(
+    box.x + ctx.lineWidth / 2,
+    box.y + ctx.lineWidth / 2,
+    box.w - ctx.lineWidth,
+    box.h - ctx.lineWidth,
+  );
   ctx.beginPath();
   ctx.rect(box.x, box.y, box.w, box.h);
   ctx.clip();
@@ -161,6 +171,10 @@ export async function composeShareStill(sceneBlob) {
   drawHort(ctx, origin, dpr, canvas.height);
   scene.close?.();
   return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("share still failed"))), "image/png");
+    canvas.toBlob(
+      (blob) =>
+        blob ? resolve(blob) : reject(new Error("share still failed")),
+      "image/png",
+    );
   });
 }
