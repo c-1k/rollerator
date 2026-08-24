@@ -137,15 +137,14 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
         d.flightMs,
         `${kind} flight ${d.flightMs} ms`,
       ).toBeGreaterThanOrEqual(300);
-      // 2200, not the soak's p95 of 2000: this is ONE roll, and a single
-      // draw is allowed past a 95th percentile by definition. What a single
-      // roll may never breach is the product ceiling — the number on screen
-      // within 2.5 s of the click. #hort appears at beginCrane, which now
-      // waits out REST_BEAT_MS (300 ms) after the die is down, so the flight
-      // gets the ceiling minus the beat: 2500 − 300 = 2200. The soak's
-      // tighter band holds the distribution.
+      // This is ONE roll, and a single draw is allowed past a 95th percentile
+      // by definition. What a single roll may never breach is the product
+      // ceiling — the number on screen within 2.9 s of the click. #hort
+      // appears at beginCrane, which waits out REST_BEAT_MS (300 ms) after the
+      // die is down, so the flight gets the ceiling minus the beat:
+      // 2900 − 300 = 2600. The soak's tighter band holds the distribution.
       expect(d.flightMs, `${kind} flight ${d.flightMs} ms`).toBeLessThanOrEqual(
-        2200,
+        2600,
       );
       expect(d.bounces, `${kind} bounces ${d.bounces}`).toBeGreaterThanOrEqual(
         1,

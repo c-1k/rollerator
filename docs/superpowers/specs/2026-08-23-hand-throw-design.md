@@ -257,7 +257,9 @@ immediate behaviour.
 
 The beat is a deterministic constant added after the die is already down, so
 it moves every click-to-number figure by the same amount and buys nothing back
-from the throw. The ceiling moved with it, 2200 -> 2500.
+from the throw. The ceiling moved with it, 2200 -> 2500, and again to 2900
+when righting was added (§4) -- both raises bought something the player can
+see rather than slack.
 
 **A rest is on the floor, and that is checked.** `atRest` is `isSleepy` AND a
 height test, and the height half is not a tautology. Rest used to be a pure
@@ -448,7 +450,7 @@ into §4.
 > 2026-08-23: both hops authored and bounded (`bounceHeights`), `bounces`
 > 1–6, `wallHits` ≤ 1, `heldFrames` 0, a radial landing bound read off
 > `debug().arena`, a resting height on the floor, flight median ≤ 1700 and
-> **p95 ≤ 2200**, and click-to-number **≤ 2500 ms**.
+> **p95 ≤ 2200**, and click-to-number **≤ 2900 ms**.
 >
 > Two of those carry rulings worth naming. The flight p95 was raised
 > 2000 → 2200 because the click ceiling is the bound that actually binds and

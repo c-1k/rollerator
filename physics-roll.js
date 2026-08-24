@@ -387,7 +387,7 @@ export const CRANE_MS = 400;
  *
  * It is a deterministic additive constant on the click-to-number time, which
  * is why the ceiling moved 2200 -> 2500 with it rather than the throw being
- * re-tuned to pay for it.
+ * re-tuned to pay for it. It went to 2900 later the same day for righting.
  */
 export const REST_BEAT_MS = 300;
 

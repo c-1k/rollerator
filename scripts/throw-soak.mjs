@@ -96,12 +96,28 @@ const BOUNDS = {
   heldFrames: 0,
   wallMargin: 0.3,
   dieRadius: 0.82,
-  // Raised from 2200 on 2026-08-23 when Cam asked for a beat of stillness
-  // before the result is presented (`REST_BEAT_MS`). The beat is a
-  // deterministic 300 ms added after the die is already down, so it moves
-  // every click-to-number figure by the same amount and buys nothing back
+  // 2200 -> 2500 -> 2900, both raises on 2026-08-23 and both for something the
+  // player can see rather than for slack.
+  //
+  // 2500 paid for `REST_BEAT_MS`: Cam asked for a beat of stillness before the
+  // result is presented, a deterministic 300 ms added after the die is already
+  // down, which moves every figure by the same amount and buys nothing back
   // from the throw.
-  timeToNumberMs: 2500,
+  //
+  // 2900 pays for righting (`THROW.righting`). Every nudge injects spin that
+  // has to decay back under `rest.ang` before the sim will stop, and that is
+  // charged straight here. The alternatives were to loosen the tilt tolerance
+  // or cut the reserved attempts, and both leak the visible cocked rest that
+  // the righting exists to fix; the ruling of 2026-08-23 took the latency.
+  //
+  // Caveat on any figure measured against this: click-to-number is one sample
+  // per die and #hort waits on environment playback, which carries 300-1000 ms
+  // of noise on a loaded box (measured by the beat A/B). The worst numbers
+  // behind this raise -- 2597-2701 on three dice -- were taken while the
+  // machine was recovering from a load incident. On a quiet box the honest
+  // expectation is ~2700 or better, and Task 6's final gate records the real
+  // one.
+  timeToNumberMs: 2900,
   // Where the die comes to REST, as a radius from centre. The radial landing
   // bound above is containment -- it only says the die stopped clear of the
   // ring. These two say the result reads as centred: Cam's 2026-08-23 note
