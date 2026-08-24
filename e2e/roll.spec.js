@@ -68,6 +68,40 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
       await page.selectOption("#die", kind);
       await expect(page.locator("#hort")).toBeHidden();
 
+      // Watch the die through the whole PRESENTATION, not just at the end.
+      // The read below is deliberately pinned post-finish, and by then
+      // `finishRoll` -> `lockSettleFrame` has re-pinned the mesh to
+      // `landedPos` -- so a slide introduced during the crane or the hold is
+      // invisible to the single-sample check further down, even though the
+      // die is already on screen being presented to the viewer for 1.2 s.
+      // Measured: the Task 6 slide control, applied to `beginCrane`, left
+      // every assertion in this file green. Sample every frame instead and
+      // keep the worst deviation.
+      await page.evaluate(() => {
+        const w = window;
+        w.__slideWatch = { max: 0, samples: 0, raf: 0 };
+        const tick = () => {
+          const d = w.__dice.debug();
+          // Only while the result is being presented. Before the die lands,
+          // `landedPos` still holds the PREVIOUS roll's landing and the two
+          // legitimately differ by the width of the arena.
+          if (
+            (d.phase === "crane" || d.phase === "hold") &&
+            d.meshPos &&
+            d.landedPos
+          ) {
+            let m = 0;
+            for (let k = 0; k < 3; k++) {
+              m = Math.max(m, Math.abs(d.meshPos[k] - d.landedPos[k]));
+            }
+            if (m > w.__slideWatch.max) w.__slideWatch.max = m;
+            w.__slideWatch.samples++;
+          }
+          w.__slideWatch.raf = requestAnimationFrame(tick);
+        };
+        tick();
+      });
+
       await page.click("#roll");
       await expect(page.locator("#hort")).toBeVisible({ timeout: 45_000 });
 
@@ -222,6 +256,21 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
           `${kind} was moved after landing (axis ${k})`,
         ).toBeLessThan(1e-3);
       }
+      // ...and it was there for the WHOLE presentation, not just at the end.
+      const slide = await page.evaluate(() => {
+        cancelAnimationFrame(window.__slideWatch.raf);
+        return window.__slideWatch;
+      });
+      // Without this the check above could pass on zero data and prove
+      // nothing -- the same hole the soak's null metric guards close.
+      expect(
+        slide.samples,
+        `${kind}: the presentation was never sampled — the slide watch covered nothing`,
+      ).toBeGreaterThan(0);
+      expect(
+        slide.max,
+        `${kind} moved ${slide.max} from its landing during the presentation (${slide.samples} frames sampled)`,
+      ).toBeLessThan(1e-3);
     });
   }
 
