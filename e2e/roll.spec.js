@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { upwardFaceIndex } from "../physics-roll.js";
+import { FLIGHT_MAX_MS, upwardFaceIndex } from "../physics-roll.js";
 
 /**
  * The load-bearing behavioural test.
@@ -137,15 +137,18 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
         d.flightMs,
         `${kind} flight ${d.flightMs} ms`,
       ).toBeGreaterThanOrEqual(300);
-      // This is ONE roll, and a single draw is allowed past a 95th percentile
-      // by definition. What a single roll may never breach is the product
-      // ceiling — the number on screen within 2.9 s of the click. #hort
-      // appears at beginCrane, which waits out REST_BEAT_MS (300 ms) after the
-      // die is down, so the flight gets the ceiling minus the beat:
-      // 2900 − 300 = 2600. The soak's tighter band holds the distribution.
-      expect(d.flightMs, `${kind} flight ${d.flightMs} ms`).toBeLessThanOrEqual(
-        2600,
-      );
+      // NOT the click ceiling. flightMs comes out of the silent simulation,
+      // which stops itself at THROW.flightMaxMs, so any bound at or above that
+      // is unreachable and asserts nothing — a 2600 here was dead the moment
+      // it was written. What IS worth catching is the sim hitting its own cap:
+      // that means the die never came to rest at all and the frames end
+      // mid-throw. Hence strictly less than, and read off the profile rather
+      // than restated, so it tracks flightMaxMs if that ever moves. The click
+      // ceiling (2900) is the soak's to enforce, against the real wall clock.
+      expect(
+        d.flightMs,
+        `${kind} flight ${d.flightMs} ms reached the ${FLIGHT_MAX_MS} ms sim cap — the die never rested`,
+      ).toBeLessThan(FLIGHT_MAX_MS);
       expect(d.bounces, `${kind} bounces ${d.bounces}`).toBeGreaterThanOrEqual(
         1,
       );

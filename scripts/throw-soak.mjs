@@ -327,6 +327,22 @@ try {
           "0% against nothing rather than against a measured throw.",
       );
     }
+    // Same reasoning as the two guards above, and this one is sharper because
+    // the cocked gate is a 100%-compliance bound. An absent metric flows
+    // undefined -> Math.max -> NaN, and `NaN > BOUNDS.cockedDeg` is false, so
+    // the gate would report full compliance having measured nothing at all.
+    if (samples.some((s) => s.cockedDeg == null)) {
+      throw new Error(
+        `${kind}: debug() reported no cockedDeg -- this build predates the ` +
+          "righting pass, so the cocked gate below would pass on no data.",
+      );
+    }
+    if (samples.some((s) => s.topFaceDeg == null)) {
+      throw new Error(
+        `${kind}: debug() reported no topFaceDeg -- the presented-face tilt ` +
+          "printed beside the gate would read NaN.",
+      );
+    }
     // The kicks are the authored part of the throw. If they did not all fire,
     // the apex numbers below are measuring plain restitution and the run is
     // certifying the wrong physics.

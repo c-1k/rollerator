@@ -1238,12 +1238,18 @@ export function createDiceStage(canvas, video) {
   // height. The quote card is a band across the bottom of the page and a die
   // presented dead-centre lands under it -- Cam, 2026-08-23, after the closer
   // crane landed: "I don't want the quote card overlapping with the die".
-  // The card's top edge measures at ~62% of viewport height at 1280x900 and
-  // ~68% in portrait, and the die's projected radius is ~11% of frame height
-  // at the reveal distance, so lifting the centre by 0.16 of frame height
-  // puts its bottom edge near 45% -- clear of the card by a sixth of the
-  // viewport, in both orientations.
-  const REVEAL_RISE = 0.16;
+  // The size of the lift is set by the WORST card, not the typical one, and
+  // that is the whole reason it is 0.20 rather than 0.16. The die's projected
+  // bottom edge is essentially fixed -- measured 491-497 px at 1280x900
+  // across d4/d10/d20/d100 -- while the card is bottom-anchored and grows
+  // upward as the quote wraps, so its top edge moves in discrete steps with
+  // the line count: 130 px tall -> top at 567, 153 -> 545, 159 -> 538,
+  // 182 -> 516. At 0.16 the three shorter cards cleared by 4.7-9.3% of
+  // viewport height and the four-line one by only 2.3-2.6%, which is the die
+  // very nearly touching the quote. 0.20 lifts the die a further 4% of frame
+  // height and clears even that card, while leaving its top edge around 12%
+  // down the frame -- nowhere near the top.
+  const REVEAL_RISE = 0.2;
 
   /**
    * `REVEAL_RISE` converted from a fraction of frame height into world units
@@ -2374,10 +2380,17 @@ export function createDiceStage(canvas, video) {
         // restating the profile's length as a literal.
         kicks: lastRoll?.kicks ?? null,
         bounceHeights: THROW.bounceHeights.length,
-        // Tilt of the presented face off level, degrees. 0 is flat.
+        // Tilt of the face the die is RESTING ON, off the floor, in degrees.
+        // 0 is flat. This is the cocked measure and the one that is gated:
+        // it is shape-independent, where the presented face is not. See
+        // `bottomFaceTilt`.
         cockedDeg: lastRoll?.cockedDeg ?? null,
         // How many righting nudges this throw needed. 0 on a clean flat rest.
         rightingNudges: lastRoll?.rightingNudges ?? null,
+        // Tilt of the PRESENTED face off level, degrees. Context, never
+        // gated: on a d10 or d100 a perfectly flat rest still reads 20-31
+        // here, because a trapezohedron's faces are not parallel to the ones
+        // opposite them. That is the shape, not a fault.
         topFaceDeg: lastRoll?.topFaceDeg ?? null,
         // The glyph's in-plane angle ON SCREEN at the current camera, degrees,
         // signed, 0 = upright. This is what "off axis" actually looks like to
