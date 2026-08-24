@@ -5,6 +5,7 @@ import { composeShareStill } from "./share-card.js?v=faces512";
 const envFilm = document.querySelector("#env-film");
 const form = document.querySelector("#war-table");
 const envSelect = document.querySelector("#environment");
+const skinSelect = document.querySelector("#skin");
 const dieSelect = document.querySelector("#die");
 const rollBtn = document.querySelector("#roll");
 const shareBtn = document.querySelector("#share");
@@ -122,7 +123,7 @@ function setIdle() {
   hortBox.hidden = true;
   rollBtn.disabled = false;
   dice.abortRoll();
-  dice.setKind(dieSelect.value, envSelect.value);
+  dice.setKind(dieSelect.value, envSelect.value, skinSelect.value);
   dice.resetCamera();
   playEnv(envSelect.value, { loop: true, muted: true });
 }
@@ -132,6 +133,7 @@ form.addEventListener("submit", async (event) => {
   tap();
   const env = envSelect.value;
   const kind = dieSelect.value;
+  const skin = skinSelect.value;
   const id = ++actionId;
 
   lastResult = null;
@@ -139,7 +141,7 @@ form.addEventListener("submit", async (event) => {
   hortBox.hidden = true;
   rollBtn.disabled = true;
   try {
-    dice.setKind(kind, env);
+    dice.setKind(kind, env, skin);
     const envPlay = playEnv(env, { loop: false, muted: false });
     const diePlay = dice.roll();
     // The number is what the click was for, so it lands when the THROW is
@@ -201,6 +203,7 @@ muteBtn.addEventListener("click", () => {
 });
 
 envSelect.addEventListener("change", setIdle);
+skinSelect.addEventListener("change", setIdle);
 dieSelect.addEventListener("change", setIdle);
 setIdle();
 syncMuteButton();

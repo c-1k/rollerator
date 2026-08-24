@@ -65,6 +65,30 @@
       // rendered site is unchanged, then delete this override.
       "includes": ["quotes.js", "share-card.js", "styles.css", "vercel.json"],
       "formatter": { "enabled": false }
+    },
+    {
+      // die-skins.js -- same mechanism, different reason.
+      //
+      // It is a hand-laid-out DATA table: one field per line, so a value
+      // can be read against the die it describes. As written today it
+      // already matches the formatter's output byte for byte (checked, not
+      // assumed) -- it is held out for what lands here NEXT, the per-skin
+      // wear profiles and the GLSL chunk builder, which are laid out for
+      // reading rather than for Biome.
+      //
+      // THE LINTER MUST STAY ON. This file stops being pure data the
+      // moment buildWearChunk() arrives in it -- that is executable
+      // string-assembly logic shipped to the browser, and it needs the
+      // same defect checking as anything else. That is why this lives
+      // here and not in the files.includes exclusion above, which would
+      // switch off lint and format together.
+      //
+      // TO CLOSE: when the table stops growing, run the formatter over it
+      // as its own deliberate commit, look at the rendered dice, then
+      // delete this entry. die-skins.test.js is a root *.test.js and is
+      // linted AND formatted normally -- it is not mentioned anywhere.
+      "includes": ["die-skins.js"],
+      "formatter": { "enabled": false }
     }
   ]
 }

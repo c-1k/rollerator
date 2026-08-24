@@ -647,6 +647,19 @@ export function revealCamera(texUpWorld, { tilt, distance, aim, rise = 0, worldU
   };
 }
 
+/**
+ * FROZEN, and no longer a texture decision.
+ *
+ * This was the per-die twist applied on top of `triangleMedianUp` to place a
+ * numeral. It is not that any more: glyph orientation is derived from the
+ * face's own bottom edge (`edgeAlignedUp`), which is what makes a numeral read
+ * square to its triangle instead of a few degrees off it.
+ *
+ * The table stays because `plump`'s corner ramp is quantised through float32
+ * IN THIS BASIS, and the shipped collision hull was certified against those
+ * exact bits. `dice3d.js` keeps the old basis alive for the ramp alone. Change
+ * a value here and you change the hull, not the numerals.
+ */
 export const FACE_UV_YAW = {
   d8: (-7.5 * Math.PI) / 180,
   d10: (-6 * Math.PI) / 180,
@@ -788,6 +801,265 @@ export function swapValueFaces(values, landedIndex, forceValue) {
   next[landedIndex] = next[j];
   next[j] = tmp;
   return next;
+}
+
+/**
+ * The face's outline, with the vertices a triangulation duplicated removed.
+ *
+ * A die face reaches this code as a run of triangles that share vertices, and
+ * the order they arrive in is NOT the outline. `BoxGeometry` emits its quad as
+ * a strip, so first-seen order traces a bowtie; `DodecahedronGeometry` fans
+ * its pentagon about a vertex that is therefore visited three times, out of
+ * ring order. Both need the same repair, so this does both: drop the repeats,
+ * then walk what is left by angle about their mean.
+ *
+ * Every die face in this project is convex, which is what makes the angular
+ * walk exact -- for a convex polygon the vertices are already in angular order
+ * about any interior point, so sorting recovers the outline rather than
+ * inventing one.
+ *
+ * Winding is preserved: the ring comes back turning the same way the incoming
+ * triangles did, because a mirrored face would mirror the numeral on it.
+ */
+export function uniquePolygon(points2d, eps = 1e-6) {
+  const seen = [];
+  for (const p of points2d) {
+    if (seen.some((q) => Math.abs(q[0] - p[0]) <= eps && Math.abs(q[1] - p[1]) <= eps)) continue;
+    seen.push([p[0], p[1]]);
+  }
+  if (seen.length < 3) return seen;
+
+  let cx = 0;
+  let cy = 0;
+  for (const p of seen) {
+    cx += p[0];
+    cy += p[1];
+  }
+  cx /= seen.length;
+  cy /= seen.length;
+  const ring = seen
+    .map((p) => ({ p, a: Math.atan2(p[1] - cy, p[0] - cx) }))
+    .sort((x, y) => x.a - y.a)
+    .map((x) => x.p);
+
+  // `ring` is counter-clockwise by construction. The input's own winding is
+  // read off its first triangle, which is the only part of the incoming order
+  // that is guaranteed to be a real face loop.
+  const first = points2d.slice(0, 3);
+  if (first.length === 3 && signedArea(first) < 0) ring.reverse();
+  return ring;
+}
+
+function signedArea(poly) {
+  let a = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i];
+    const q = poly[(i + 1) % poly.length];
+    a += p[0] * q[1] - q[0] * p[1];
+  }
+  return a / 2;
+}
+
+function polygonPerimeterAndEdges(poly) {
+  const edges = [];
+  let perimeter = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i];
+    const q = poly[(i + 1) % poly.length];
+    const l = Math.hypot(q[0] - p[0], q[1] - p[1]);
+    edges.push({ p, q, l });
+    perimeter += l;
+  }
+  return { edges, perimeter };
+}
+
+function meanPoint(poly) {
+  let x = 0;
+  let y = 0;
+  for (const p of poly) {
+    x += p[0];
+    y += p[1];
+  }
+  return [x / poly.length, y / poly.length];
+}
+
+/**
+ * The centre of the face's inscribed circle, and its radius.
+ *
+ * This is the numeral's anchor, and it is deliberately NOT the vertex mean.
+ * On an isosceles triangle -- every face of a d4, d8, d10, d20 -- the two
+ * differ by around 8 % of the face, which is a numeral visibly pushed toward
+ * the wide end. On a fan-triangulated pentagon the vertex mean is not even a
+ * property of the shape: it moves with how the mesh was cut up.
+ *
+ * Shapes, in the order the dice need them:
+ *  - triangle: the classic side-weighted mean, exact.
+ *  - kite: every kite is tangential, so an exact incircle exists; its centre
+ *    is on the axis of symmetry, found by equalising the distance to the two
+ *    unequal edges.
+ *  - regular polygon (the d6's square, the d12's pentagon): the centre, with
+ *    the apothem for a radius.
+ *  - anything else: the vertex mean and its shortest distance to an edge. Not
+ *    the true incentre, but inside the face and touching no edge, which is all
+ *    the caller needs from a shape this project does not build.
+ *
+ * Degenerate input returns finite numbers rather than throwing -- a die that
+ * renders with a numeral in the wrong place is a bug report, and a die that
+ * throws during mesh build is a blank screen.
+ */
+export function polygonIncentre(points2d) {
+  const poly = points2d;
+  if (!poly || poly.length === 0) return { c: [0, 0], r: 0 };
+  if (poly.length === 1) return { c: [poly[0][0], poly[0][1]], r: 0 };
+  if (poly.length === 2) return { c: meanPoint(poly), r: 0 };
+
+  const { edges, perimeter } = polygonPerimeterAndEdges(poly);
+  const area = Math.abs(signedArea(poly));
+  if (!(perimeter > 0) || !(area > 0)) return { c: meanPoint(poly), r: 0 };
+
+  if (poly.length === 3) {
+    const [A, B, C] = poly;
+    // Weight each vertex by the length of the side OPPOSITE it.
+    const a = Math.hypot(C[0] - B[0], C[1] - B[1]);
+    const b = Math.hypot(A[0] - C[0], A[1] - C[1]);
+    const c = Math.hypot(B[0] - A[0], B[1] - A[1]);
+    const s = a + b + c;
+    return {
+      c: [(a * A[0] + b * B[0] + c * C[0]) / s, (a * A[1] + b * B[1] + c * C[1]) / s],
+      r: area / (s / 2),
+    };
+  }
+
+  const centre = meanPoint(poly);
+  const distances = edges.map((e) => edgeDistance(e, centre));
+
+  // Regular: all vertices at one radius and all edges one length. The centre
+  // IS the incentre and the apothem IS the inradius, to the last bit.
+  const radii = poly.map((p) => Math.hypot(p[0] - centre[0], p[1] - centre[1]));
+  const spread = (xs) => Math.max(...xs) - Math.min(...xs);
+  const scale = Math.max(...radii);
+  if (scale > 0 && spread(radii) < 1e-6 * scale && spread(edges.map((e) => e.l)) < 1e-6 * scale) {
+    return { c: centre, r: area / (perimeter / 2) };
+  }
+
+  if (poly.length === 4) {
+    const kite = kiteIncentre(poly, edges);
+    if (kite) return { c: kite, r: area / (perimeter / 2) };
+  }
+
+  return { c: centre, r: Math.min(...distances) };
+}
+
+/** Perpendicular distance from a point to the infinite line through an edge. */
+function edgeDistance(e, c) {
+  const ex = e.q[0] - e.p[0];
+  const ey = e.q[1] - e.p[1];
+  return Math.abs((c[0] - e.p[0]) * ey - (c[1] - e.p[1]) * ex) / e.l;
+}
+
+/**
+ * A kite's incentre: the point on its axis of symmetry equidistant from the
+ * two unequal edges. Returns null when the quadrilateral is not a kite, so the
+ * caller can fall back rather than trusting a made-up answer.
+ */
+function kiteIncentre(poly, edges) {
+  // A kite has two adjacent pairs of equal sides. Find the vertex where a
+  // shorter run meets a longer one -- the axis runs through it and the
+  // opposite vertex.
+  const l = edges.map((e) => e.l);
+  const tol = 1e-9 * Math.max(...l);
+  let apex = -1;
+  for (let i = 0; i < 4; i++) {
+    // edges[i] leaves vertex i; edges[(i + 3) % 4] arrives at it.
+    const inb = l[(i + 3) % 4];
+    const out = l[i];
+    const oppIn = l[(i + 1) % 4];
+    const oppOut = l[(i + 2) % 4];
+    if (Math.abs(inb - out) <= tol && Math.abs(oppIn - oppOut) <= tol && Math.abs(inb - oppIn) > tol) {
+      apex = i;
+      break;
+    }
+  }
+  if (apex < 0) return null;
+
+  const A = poly[apex];
+  const C = poly[(apex + 2) % 4];
+  const ax = C[0] - A[0];
+  const ay = C[1] - A[1];
+  const axisLen = Math.hypot(ax, ay);
+  if (!(axisLen > 0)) return null;
+
+  // Walk the axis to where the two unequal edges are equidistant. Both
+  // distances are linear in t, so one division lands exactly on the crossing.
+  const e0 = edges[apex];
+  const e1 = edges[(apex + 1) % 4];
+  const d = (t, e) => edgeDistance(e, [A[0] + ax * t, A[1] + ay * t]);
+  const f0 = d(0, e0) - d(0, e1);
+  const f1 = d(1, e0) - d(1, e1);
+  if (!Number.isFinite(f0) || !Number.isFinite(f1) || f0 === f1) return null;
+  const t = f0 / (f0 - f1);
+  if (!(t > 0 && t < 1)) return null;
+  return [A[0] + ax * t, A[1] + ay * t];
+}
+
+/**
+ * Which way is up for a numeral drawn on this face.
+ *
+ * A numeral reads straight when its BASELINE is parallel to an edge of the
+ * face it sits on. Anything else looks cockeyed, and a numeral placed by a
+ * fixed per-die twist is cockeyed on every face by exactly that twist.
+ *
+ * So: pick a bottom edge, and return the in-plane direction perpendicular to
+ * it, pointing into the face. The baseline is then parallel to that edge by
+ * construction, and the glyph's top points across the face -- at the opposite
+ * vertex on a triangle, at the opposite edge on a square.
+ *
+ * THE CONVENTION, and every face of every die uses it: the bottom edge is the
+ * one whose midpoint lies farthest along `down`, measured from the face's
+ * incentre. `down` is the die's own downward axis projected into the face
+ * plane, so the die is laid out the way a manufactured one is -- consistently
+ * about its own axis -- rather than each face choosing independently. Ties go
+ * to the lowest edge index, so a symmetric face is still deterministic.
+ *
+ * Pure 2D: `ring` is the face's outline from `uniquePolygon`, `centre` its
+ * incentre, `down` a unit vector, all in the same face-plane basis.
+ */
+export function edgeAlignedUp(ring, centre, down) {
+  if (!ring || ring.length < 3) return { up: [0, 1], edge: -1 };
+
+  let edge = 0;
+  let bestScore = -Infinity;
+  for (let i = 0; i < ring.length; i++) {
+    const p = ring[i];
+    const q = ring[(i + 1) % ring.length];
+    const mx = (p[0] + q[0]) / 2 - centre[0];
+    const my = (p[1] + q[1]) / 2 - centre[1];
+    const score = mx * down[0] + my * down[1];
+    // Strictly greater, so the FIRST edge wins a tie.
+    if (score > bestScore + 1e-9) {
+      bestScore = score;
+      edge = i;
+    }
+  }
+
+  const p = ring[edge];
+  const q = ring[(edge + 1) % ring.length];
+  // The edge's normal: rotate the edge vector a quarter turn.
+  let ux = -(q[1] - p[1]);
+  let uy = q[0] - p[0];
+  const len = Math.hypot(ux, uy);
+  if (!(len > 0)) return { up: [0, 1], edge };
+  ux /= len;
+  uy /= len;
+  // Turn it inward, toward the incentre, so the glyph stands on the edge
+  // rather than hanging off it.
+  const mx = (p[0] + q[0]) / 2;
+  const my = (p[1] + q[1]) / 2;
+  if (ux * (centre[0] - mx) + uy * (centre[1] - my) < 0) {
+    ux = -ux;
+    uy = -uy;
+  }
+  return { up: [ux, uy], edge };
 }
 
 export function triangleMedianUp(a, b, c, worldUp = [0, 1, 0]) {
