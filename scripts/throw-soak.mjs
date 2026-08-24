@@ -218,6 +218,7 @@ function fastBatch(n) {
       apexHeights: d.apexHeights,
       apex2Heights: d.apex2Heights,
       cockedDeg: d.cockedDeg,
+      restBodyY: d.restBodyY,
       topFaceDeg: d.topFaceDeg,
       rightingNudges: d.rightingNudges,
       tailSpin: d.tailSpin,
@@ -327,6 +328,12 @@ try {
           "0% against nothing rather than against a measured throw.",
       );
     }
+    if (samples.some((s) => s.restBodyY == null)) {
+      throw new Error(
+        `${kind}: debug() reported no restBodyY -- without it the rest-height ` +
+          "gate below reads NaN and passes on no data.",
+      );
+    }
     // Same reasoning as the two guards above, and this one is sharper because
     // the cocked gate is a 100%-compliance bound. An absent metric flows
     // undefined -> Math.max -> NaN, and `NaN > BOUNDS.cockedDeg` is false, so
@@ -399,7 +406,11 @@ try {
       Math.hypot(s.landedPos[0], s.landedPos[2]),
     );
     const maxR = Math.max(...radii);
-    const maxRestY = Math.max(...samples.map((s) => s.landedPos[1]));
+    // The BODY's height at loop exit, not landedPos[1]. The latter is the
+    // geometric seat height derived from the landed quaternion, so it is
+    // ~0.88 at most whatever the die did, and a gate on it could never have
+    // caught the mid-air stop it was written for.
+    const maxRestY = Math.max(...samples.map((s) => s.restBodyY));
     const cocked = samples.map((s) => s.cockedDeg);
     const maxCocked = Math.max(...cocked);
     const overCocked = cocked.filter((c) => c > BOUNDS.cockedDeg).length;
@@ -478,6 +489,12 @@ try {
           `${round(row.wallQuietShare * 100, 0)}% (need ` +
           `${BOUNDS.wallHitShare * 100}%)`,
       );
+    if (!FAST && samples.some((s) => s.heldFrames == null)) {
+      throw new Error(
+        `${kind}: debug() reported no heldFrames -- the replay-stutter gate ` +
+          "below would pass on no data.",
+      );
+    }
     if (!FAST && row.heldMax > BOUNDS.heldFrames)
       fail(`heldFrames max ${row.heldMax} -- the replay stuttered`);
     if (overCocked)
@@ -488,8 +505,8 @@ try {
       );
     if (maxRestY > restYBound)
       fail(
-        `a die came to rest ${round(maxRestY)} up, past ${round(restYBound)} ` +
-          `-- that is not a rest on the floor`,
+        `the simulation stopped with the body ${round(maxRestY)} up, past ` +
+          `${round(restYBound)} (restBodyY) -- that is not a rest on the floor`,
       );
     if (maxR > clearR)
       fail(`landed ${round(maxR - clearR)} past the radial landing bound`);

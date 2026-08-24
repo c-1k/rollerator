@@ -32,7 +32,7 @@
  *     have to reach the wall. Grow the disc with the ring.
  *
  * In practice the ring is now a backstop and little else. The tuned profile
- * rests the die at a median radius under 1.0 and a p95 under 1.8, so a wall
+ * rests the die at a median radius under 1.2 and a p95 under 2.0, so a wall
  * touch is rare (measured 0 per roll on every die at N=10) -- which is what
  * an invisible barrier should be. The bound the soak holds is containment;
  * `restRadiusMedian` / `restRadiusP95` over in the soak are the ones that

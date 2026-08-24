@@ -110,16 +110,23 @@ composition. Two framing numbers are set here rather than in the physics:
   axis in a wide empty floor. At `PRESENT_FOV` 44 the narrow half-extent at
   the aim plane is `d * 0.404 * min(1, aspect)`, so these lifts put the die at
   ~41 % of it in both orientations, with better than 2× of margin to the edge.
-- **`REVEAL_RISE`** — 0.16 of frame height, converted to world units at the
+- **`REVEAL_RISE`** — 0.2 of frame height, converted to world units at the
   aim plane and passed to `revealCamera` as `rise`. It slides the camera and
   its aim together along screen-down, so the die does not move and the
   distance and tilt are unchanged; only where the die falls in the viewport
   changes. It exists because the quote card is a band across the bottom of
   the page and a dead-centre reveal put the die behind it. Measured clearance
-  between the die's projected bottom edge and the card's top edge: **102–154 px
-  landscape (11.3–17.1 % of viewport height) and 211–237 px portrait
-  (21.1–23.7 %)**, over five rolls each. `e2e/roll.spec.js` holds it to a
-  4 %-of-viewport floor, reading both rects at runtime.
+  between the die's projected bottom edge and the card's top edge. The figure
+  that matters is the WORST card, not the typical one: the die's bottom edge
+  is essentially fixed (491–497 px at 1280×900 across d4/d10/d20/d100) while
+  the card is bottom-anchored and grows upward as the quote wraps, so its top
+  edge steps with the line count — 130 px tall → 567, 153 → 545, 159 → 538,
+  182 → 516. At the original 0.16 the four-line card cleared by only
+  **2.3–2.6 %** and the e2e failed about one run in three. At 0.2 the same
+  card clears by **5.9–7.3 %**, the minimum over 20 rolls across four dice is
+  **5.9 %**, portrait has far more room still, and the die's top edge sits
+  around 12 % down the frame. `e2e/roll.spec.js` holds it to a
+  4 %-of-viewport floor in BOTH orientations, reading both rects at runtime.
 
 **The numeral reads upright, and that is geometry rather than tuning.** The die
 rests at whatever yaw physics left it, so the glyph would be rotated under an
@@ -165,6 +172,15 @@ export const THROW = {
     wall: { friction: 2.0, restitution: 0.08 },
   },
   damping: { linear: 0.85, angular: 0.86 },
+  righting: {
+    toleranceDeg: 10,        // resting-face tilt that counts as cocked
+    early: 2,                // nudges while still settling (cheap)
+    rest: 2,                 // RESERVED for a lean at a genuine stop
+    spin: 6,
+    spinMax: 6.5,
+    lift: 1.6,
+    wallPush: 1.5,
+  },
   sleep: { speedLimit: 0.7, timeLimit: 0.14 },
   rest: { lin: 0.3, ang: 1.0 },
 };

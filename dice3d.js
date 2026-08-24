@@ -1637,6 +1637,7 @@ export function createDiceStage(canvas, video) {
       dieHeight: st.metrics?.dieHeight ?? null,
       kicks: st.metrics?.kicks ?? null,
       rightingNudges: st.metrics?.rightingNudges ?? null,
+      restBodyY: st.metrics?.restBodyY ?? null,
       tailSpin: st.metrics?.tailSpin ?? null,
       __hits: st.metrics?.__hits ?? null,
       heldFrames: 0,
@@ -2093,6 +2094,16 @@ export function createDiceStage(canvas, video) {
     metrics.apex2Heights = +((rises[1] ?? 0) / dieHeight).toFixed(3);
     metrics.kicks = kicks;
     metrics.rightingNudges = rightedEarly + rightedRest;
+    // Where the BODY actually was when the simulation stopped.
+    //
+    // Not `landedPos[1]`, which is the geometric seat height derived from the
+    // landed quaternion (`restOffsetY`) and so is ~0.88 at most no matter what
+    // the die was doing -- a die frozen at the apex of a hop still reports a
+    // seat height, because `beginBeat` snaps the mesh down to it. That made
+    // the rest-height gates in the soak and the e2e unfalsifiable: they could
+    // not have caught the very mid-air stop they were written for. This is the
+    // raw simulation state at loop exit and is what those gates read now.
+    metrics.restBodyY = +dieBody.position.y.toFixed(3);
     // How fast the die is still turning as it comes to rest. This is NOT a
     // bound -- Cam's ruling is maximum visible spin ("i want that shit
     // SPINNING"), so a die that keeps turning into the tail is the goal and
@@ -2387,6 +2398,10 @@ export function createDiceStage(canvas, video) {
         cockedDeg: lastRoll?.cockedDeg ?? null,
         // How many righting nudges this throw needed. 0 on a clean flat rest.
         rightingNudges: lastRoll?.rightingNudges ?? null,
+        // The body's y where the silent sim stopped -- raw simulation state,
+        // not the geometric seat height. This is the one that can catch a die
+        // that stopped in mid-air; `landedPos[1]` cannot.
+        restBodyY: lastRoll?.restBodyY ?? null,
         // Tilt of the PRESENTED face off level, degrees. Context, never
         // gated: on a d10 or d100 a perfectly flat rest still reads 20-31
         // here, because a trapezohedron's faces are not parallel to the ones

@@ -228,11 +228,20 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
       // A rest is on the FLOOR. Rest used to be a pure speed test, and at the
       // apex of an authored hop the vertical velocity is zero while the
       // horizontal is capped — so a low-spin throw could satisfy it in mid-air
-      // and be presented floating four die-heights up. `dieHeight` is the
-      // circumsphere diameter, so a resting centre is at most half of it.
+      // and be presented floating four die-heights up.
+      //
+      // Read `restBodyY`, the body's height where the simulation stopped, NOT
+      // `landedPos[1]`: that one is the geometric seat height derived from the
+      // landed quaternion, so it is ~0.88 at most however the throw ended, and
+      // this assertion was unfalsifiable while it read that. `dieHeight` is
+      // the circumsphere diameter, so a resting centre is at most half of it.
       expect(
-        d.landedPos[1],
-        `${kind} came to rest ${d.landedPos[1]} up, off the floor (die ${d.dieHeight} u)`,
+        d.restBodyY,
+        `${kind} restBodyY is null — the rest-height check would assert nothing`,
+      ).not.toBeNull();
+      expect(
+        d.restBodyY,
+        `${kind} simulation stopped with the body ${d.restBodyY} up, off the floor (die ${d.dieHeight} u)`,
       ).toBeLessThanOrEqual(d.dieHeight);
       expect(
         d.heldFrames,
