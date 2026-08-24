@@ -464,15 +464,42 @@ across two N=20 runs).
 Each is applied, run once, confirmed to fail with the message named, and
 reverted; `grep -c "MUTATION CONTROL" dice3d.js` must return 0 afterwards.
 
-- **Slow-mo.** Scale the replay's wall-clock advance (× 0.22) **and** replace
-  the interpolated pose with the floor-index frame,
-  `interpolateFrame(frames[i], frames[i], 0)` → `heldFrames` must go above 0
-  and fail `"the replay stuttered"`. Both halves are needed: the scaled clock
-  alone will not bite, because interpolation gives a *different* pose on every
-  tick however slowly the clock advances, which is exactly what the
-  interpolation was added to do. It is the held frame, not the slow clock,
-  that the detector sees. (Corrected 2026-08-23, Task 3 — this control
-  previously read "re-introduce `slowMoScale` on the replay clock".)
+- **Slow-mo / stutter.** The control has to make the *displayed pose repeat*,
+  and on this renderer that takes more than slowing the clock. Measured at
+  Task 6, all three variants run:
+
+  | variant | result |
+  |---|---|
+  | scaled clock (× 0.22) alone | passes — interpolation gives a different pose every tick however slowly the clock advances. That is what interpolation is *for* |
+  | × 0.22 + plain floor index | **passes — exit 0.** Does not bite |
+  | × 0.22 + floor index held in 240-step blocks, final frame exact | fails `"d4 held 60 frames — the replay stuttered"` |
+
+  Why the second variant cannot bite is arithmetic, and it is worth writing
+  down because it is a limit of the detector rather than of the control.
+  `heldFrames` counts render ticks where the pose is *identical* while the
+  clock advanced, so it needs one render tick to advance **less than one
+  physics step**. `physStep` is 1/240 = 4.17 ms, and `wallMs` is capped at
+  250 ms; under SwiftShader on a loaded box a tick sits at that cap (the slide
+  watch measured three frames across 1.2 s of crane and hold — about 2.5 fps).
+  Even at 0.22× that is 55 ms, or 13 physics frames, per tick: the index moves
+  every time and nothing is ever held.
+
+  **So `heldFrames === 0` passes trivially in this environment.** It is a real
+  assertion on a renderer that outruns the physics step — a 60 fps browser
+  advancing 3.7 ms per tick against a 4.17 ms step, which is where the
+  original defect was seen — and it is close to vacuous under SwiftShader.
+  Anyone tightening this should either raise the render rate or compare poses
+  against elapsed time rather than against the previous tick.
+
+  Holding the pose in blocks reproduces the defect independently of renderer
+  speed. The block must end on the true final frame (`i >= last ? i : ...`),
+  or the die is left in a pose 239 steps before rest and **invariant 3** fails
+  first — measured, `|q·q0| = 0.884658` — which is a different defect and
+  proves nothing about the stutter detector.
+
+  (Corrected twice: Task 3 replaced "re-introduce `slowMoScale` on the replay
+  clock", which predated interpolation; Task 6 replaced the floor-index form
+  above after it ran green.)
 - **The slide.** In `beginCrane`, pin the mesh to the centre
   (`st.mesh.position.set(0, st.landedPos[1], 0)`) instead of `landedPos` →
   the per-die `|meshPos − landedPos|` loop must fail `"was moved after
