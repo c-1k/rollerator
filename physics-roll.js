@@ -647,6 +647,19 @@ export function revealCamera(texUpWorld, { tilt, distance, aim, rise = 0, worldU
   };
 }
 
+/**
+ * FROZEN, and no longer a texture decision.
+ *
+ * This was the per-die twist applied on top of `triangleMedianUp` to place a
+ * numeral. It is not that any more: glyph orientation is derived from the
+ * face's own bottom edge (`edgeAlignedUp`), which is what makes a numeral read
+ * square to its triangle instead of a few degrees off it.
+ *
+ * The table stays because `plump`'s corner ramp is quantised through float32
+ * IN THIS BASIS, and the shipped collision hull was certified against those
+ * exact bits. `dice3d.js` keeps the old basis alive for the ramp alone. Change
+ * a value here and you change the hull, not the numerals.
+ */
 export const FACE_UV_YAW = {
   d8: (-7.5 * Math.PI) / 180,
   d10: (-6 * Math.PI) / 180,
@@ -987,6 +1000,66 @@ function kiteIncentre(poly, edges) {
   const t = f0 / (f0 - f1);
   if (!(t > 0 && t < 1)) return null;
   return [A[0] + ax * t, A[1] + ay * t];
+}
+
+/**
+ * Which way is up for a numeral drawn on this face.
+ *
+ * A numeral reads straight when its BASELINE is parallel to an edge of the
+ * face it sits on. Anything else looks cockeyed, and a numeral placed by a
+ * fixed per-die twist is cockeyed on every face by exactly that twist.
+ *
+ * So: pick a bottom edge, and return the in-plane direction perpendicular to
+ * it, pointing into the face. The baseline is then parallel to that edge by
+ * construction, and the glyph's top points across the face -- at the opposite
+ * vertex on a triangle, at the opposite edge on a square.
+ *
+ * THE CONVENTION, and every face of every die uses it: the bottom edge is the
+ * one whose midpoint lies farthest along `down`, measured from the face's
+ * incentre. `down` is the die's own downward axis projected into the face
+ * plane, so the die is laid out the way a manufactured one is -- consistently
+ * about its own axis -- rather than each face choosing independently. Ties go
+ * to the lowest edge index, so a symmetric face is still deterministic.
+ *
+ * Pure 2D: `ring` is the face's outline from `uniquePolygon`, `centre` its
+ * incentre, `down` a unit vector, all in the same face-plane basis.
+ */
+export function edgeAlignedUp(ring, centre, down) {
+  if (!ring || ring.length < 3) return { up: [0, 1], edge: -1 };
+
+  let edge = 0;
+  let bestScore = -Infinity;
+  for (let i = 0; i < ring.length; i++) {
+    const p = ring[i];
+    const q = ring[(i + 1) % ring.length];
+    const mx = (p[0] + q[0]) / 2 - centre[0];
+    const my = (p[1] + q[1]) / 2 - centre[1];
+    const score = mx * down[0] + my * down[1];
+    // Strictly greater, so the FIRST edge wins a tie.
+    if (score > bestScore + 1e-9) {
+      bestScore = score;
+      edge = i;
+    }
+  }
+
+  const p = ring[edge];
+  const q = ring[(edge + 1) % ring.length];
+  // The edge's normal: rotate the edge vector a quarter turn.
+  let ux = -(q[1] - p[1]);
+  let uy = q[0] - p[0];
+  const len = Math.hypot(ux, uy);
+  if (!(len > 0)) return { up: [0, 1], edge };
+  ux /= len;
+  uy /= len;
+  // Turn it inward, toward the incentre, so the glyph stands on the edge
+  // rather than hanging off it.
+  const mx = (p[0] + q[0]) / 2;
+  const my = (p[1] + q[1]) / 2;
+  if (ux * (centre[0] - mx) + uy * (centre[1] - my) < 0) {
+    ux = -ux;
+    uy = -uy;
+  }
+  return { up: [ux, uy], edge };
 }
 
 export function triangleMedianUp(a, b, c, worldUp = [0, 1, 0]) {

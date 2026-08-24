@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   ANG_SLEEP,
   FACE_UV_YAW,
+  edgeAlignedUp,
   FLIGHT_MAX_MS,
   GRAVITY_Y,
   LIN_SLEEP,
@@ -985,5 +986,107 @@ describe("THROW change-detector", () => {
   //   node -e 'import("./physics-roll.js").then(m=>{const s=v=>Array.isArray(v)?`[${v.map(s).join(",")}]`:v&&typeof v==="object"?`{${Object.keys(v).sort().map(k=>`${JSON.stringify(k)}:${s(v[k])}`).join(",")}}`:JSON.stringify(v);let h=2166136261;const t=s(m.THROW);for(let i=0;i<t.length;i++){h^=t.charCodeAt(i);h=Math.imul(h,16777619);}console.log((h>>>0).toString(16).padStart(8,"0"));})'
   it("THROW is unchanged by the die redesign", () => {
     assert.equal(fnv1a(stableStringify(THROW)), "82236432");
+  });
+});
+
+
+describe("edgeAlignedUp", () => {
+  const DOWN = [0, -1];
+
+  /** Unit vector along ring edge `i`. */
+  function edgeDir(ring, i) {
+    const p = ring[i];
+    const q = ring[(i + 1) % ring.length];
+    const l = Math.hypot(q[0] - p[0], q[1] - p[1]);
+    return [(q[0] - p[0]) / l, (q[1] - p[1]) / l];
+  }
+
+  it("returns a unit vector square to the edge it chose", () => {
+    // Square to the edge IS the whole point: the baseline runs along the edge,
+    // so the numeral reads straight on its own face rather than a few degrees
+    // off it.
+    for (const ring of [uniquePolygon(D10_FACE), uniquePolygon(D6_FACE), uniquePolygon(D12_FACE)]) {
+      const { c } = polygonIncentre(ring);
+      const { up, edge } = edgeAlignedUp(ring, c, DOWN);
+      almost(Math.hypot(up[0], up[1]), 1, 1e-12);
+      const e = edgeDir(ring, edge);
+      almost(up[0] * e[0] + up[1] * e[1], 0, 1e-12);
+    }
+  });
+
+  it("points into the face, never out of it", () => {
+    for (const ring of [uniquePolygon(D10_FACE), uniquePolygon(D6_FACE), uniquePolygon(D12_FACE)]) {
+      const { c } = polygonIncentre(ring);
+      const { up, edge } = edgeAlignedUp(ring, c, DOWN);
+      const p = ring[edge];
+      const q = ring[(edge + 1) % ring.length];
+      const mx = (p[0] + q[0]) / 2;
+      const my = (p[1] + q[1]) / 2;
+      assert.ok(up[0] * (c[0] - mx) + up[1] * (c[1] - my) > 0, "glyph-up points off the face");
+    }
+  });
+
+  it("picks the edge whose midpoint lies farthest along `down`", () => {
+    const tri = regularPolygon(3);
+    const { c } = polygonIncentre(tri);
+    const { edge } = edgeAlignedUp(tri, c, DOWN);
+    const scores = tri.map((p, i) => {
+      const q = tri[(i + 1) % tri.length];
+      return ((p[0] + q[0]) / 2 - c[0]) * DOWN[0] + ((p[1] + q[1]) / 2 - c[1]) * DOWN[1];
+    });
+    assert.equal(edge, scores.indexOf(Math.max(...scores)));
+  });
+
+  it("follows `down` round the compass", () => {
+    // Rotating the die's downward axis must walk the chosen edge round the
+    // face, or the convention is not doing anything.
+    const tri = regularPolygon(3);
+    const { c } = polygonIncentre(tri);
+    const seen = new Set();
+    for (let deg = 0; deg < 360; deg += 15) {
+      const t = (deg * Math.PI) / 180;
+      seen.add(edgeAlignedUp(tri, c, [Math.cos(t), Math.sin(t)]).edge);
+    }
+    assert.equal(seen.size, 3, "every edge should be reachable");
+  });
+
+  it("turns with the face's own symmetry when `down` is flipped", () => {
+    // A square HAS an opposite edge, so flipping `down` turns the glyph
+    // exactly upside down.
+    const sq = [
+      [0, 0],
+      [1, 0],
+      [1, 1],
+      [0, 1],
+    ];
+    const su = edgeAlignedUp(sq, [0.5, 0.5], [0, -1]).up;
+    const sd = edgeAlignedUp(sq, [0.5, 0.5], [0, 1]).up;
+    almost(su[0] * sd[0] + su[1] * sd[1], -1, 1e-12);
+
+    // A triangle does NOT: opposite an edge is a vertex, so the glyph turns by
+    // 120 degrees, not 180. That is the shape, and it is why a die's numerals
+    // cannot all agree on "up" no matter what convention is chosen -- only on
+    // being square to their own edges.
+    const tri = regularPolygon(3);
+    const { c } = polygonIncentre(tri);
+    const tu = edgeAlignedUp(tri, c, [0, -1]).up;
+    const td = edgeAlignedUp(tri, c, [0, 1]).up;
+    almost(tu[0] * td[0] + tu[1] * td[1], Math.cos((120 * Math.PI) / 180), 1e-12);
+  });
+
+  it("is deterministic on a symmetric face, and does not throw on a degenerate one", () => {
+    // A square with `down` on its diagonal ties two edges exactly. Ties go to
+    // the lower index, every time, so two builds of the same die agree.
+    const sq = [
+      [0, 0],
+      [1, 0],
+      [1, 1],
+      [0, 1],
+    ];
+    const d = [Math.SQRT1_2, -Math.SQRT1_2];
+    const first = edgeAlignedUp(sq, [0.5, 0.5], d).edge;
+    for (let i = 0; i < 5; i++) assert.equal(edgeAlignedUp(sq, [0.5, 0.5], d).edge, first);
+    assert.deepEqual(edgeAlignedUp([], [0, 0], DOWN), { up: [0, 1], edge: -1 });
+    assert.deepEqual(edgeAlignedUp([[1, 1], [1, 1]], [1, 1], DOWN), { up: [0, 1], edge: -1 });
   });
 });

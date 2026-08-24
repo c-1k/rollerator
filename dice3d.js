@@ -30,6 +30,7 @@ import {
   smoothProgress,
   snapQuaternion,
   throwPose,
+  edgeAlignedUp,
   polygonIncentre,
   triangleMedianUp,
   uniquePolygon,
@@ -60,9 +61,12 @@ let texAniso = 8;
 // against that circle then sits inside every face of every die with the same
 // margin, which is the whole point: one size, one place, seven dice.
 const INCIRCLE_UV = 0.42;
-// Target ink CAP HEIGHT. Measured off the rendered glyph, not assumed from the
-// font size -- see `fitGlyph`.
-const CAP_UV = 0.23;
+// THE knob, and it is stated the way it is judged: the numeral's CAP HEIGHT as
+// a fraction of the incircle's DIAMETER. Everything else about the glyph is
+// derived from it. Cam set it by eye at 0.35; it was 0.274 before.
+const CAP_INCIRCLE = 0.35;
+// The same number as a fraction of TEX_FACE, which is what the fit solves in.
+const CAP_UV = CAP_INCIRCLE * 2 * INCIRCLE_UV;
 // Ink may span this much of the incircle's diameter before the fit shrinks it.
 const FIT_CHORD = 0.86;
 // Floor on the cap height. If it ever binds, the label does not fit the die
@@ -480,6 +484,14 @@ function glyphFont(fs) {
  * different ink, which is how a die ends up with numerals that do not match
  * each other. `actualBoundingBox*` measures the ink, and the stroke pad adds
  * the outline the mask draws around it.
+ *
+ * `ascent` -- baseline to the top of the ink -- is the CAP LINE, and it is the
+ * one the fit solves. `height` is the whole box, and it is NOT: six of Cinzel's
+ * ten digits descend below the baseline (0, 3, 5, 6, 8 and 9, yMin -14 to -42
+ * per 1000 em), so their boxes are up to 9 % taller than their caps. Equalising
+ * boxes shrinks exactly those six digits and leaves the caps uneven, which is
+ * the opposite of what a reader sees. `descent` is reported so the hang is
+ * visible; nothing is fitted to it.
  */
 function measureInk(ctx, label, fs) {
   ctx.font = glyphFont(fs);
@@ -495,13 +507,16 @@ function measureInk(ctx, label, fs) {
 }
 
 /**
- * Solve for the font size that puts this label's ink at one optical size.
+ * Solve for the font size that puts this label's CAP LINE at one optical size.
  *
  * Cap height first: every label on every die measures CAP_UV of the texture
- * tall, so a "20" is the same weight on the page as a "7". Then width: if the
- * ink would cross FIT_CHORD of the incircle's diameter it is scaled down by
- * exactly that ratio and no further, which is what makes two digits as large
- * as the face allows rather than as large as a constant allows.
+ * from baseline to cap, so a "20" is the same weight on the page as a "7", and
+ * a "5" is the same weight as a "1" even though "5" hangs 35/1000 em below the
+ * baseline. Descenders are allowed to hang; they are not squeezed into the
+ * budget. Then width: if the ink would cross FIT_CHORD of the incircle's
+ * diameter it is scaled down by exactly that ratio and no further, which is
+ * what makes two digits as large as the face allows rather than as large as a
+ * constant allows.
  *
  * Ink scales linearly with font size, so a single probe measurement solves
  * both -- and the answer is re-measured afterwards, because "it scales
@@ -510,7 +525,7 @@ function measureInk(ctx, label, fs) {
 function fitGlyph(ctx, label, size) {
   const probe = 100;
   const p = measureInk(ctx, label, probe);
-  const capPerPx = p.height / probe;
+  const capPerPx = p.ascent / probe;
   const widthPerPx = p.width / probe;
   if (!(capPerPx > 0) || !(widthPerPx > 0)) {
     // No metrics at all -- a font that failed to load. Fall back to the base
@@ -535,7 +550,7 @@ function fitGlyph(ctx, label, size) {
 
   const ink = measureInk(ctx, label, fs);
   const predicted = capPerPx * fs;
-  const residual = Math.abs(ink.height - predicted) / predicted;
+  const residual = Math.abs(ink.ascent - predicted) / predicted;
   if (residual > 0.01) {
     console.warn(`[dice3d] glyph "${label}" measured ${(residual * 100).toFixed(2)}% off its solved size`);
   }
@@ -548,6 +563,11 @@ function fitGlyph(ctx, label, size) {
  * Independent of everything above on purpose. `fitGlyph` says where the ink
  * should land; this says where it did. The two agreeing is the centring gate,
  * and it would not be a gate if both numbers came from the same measurement.
+ *
+ * `top` is reported separately because the CAP line -- baseline to `top` -- is
+ * what the size gate measures. The box's own height cannot be that gate: it
+ * includes whatever a descender adds, so a run of digits with equal boxes and
+ * unequal caps would pass it.
  */
 function inkBoxFromMask(maskPx, size, threshold = 0.5) {
   let x0 = size;
@@ -568,6 +588,7 @@ function inkBoxFromMask(maskPx, size, threshold = 0.5) {
   return {
     x: (x0 + x1 + 1) / 2,
     y: (y0 + y1 + 1) / 2,
+    top: y0,
     w: x1 - x0 + 1,
     h: y1 - y0 + 1,
   };
@@ -634,13 +655,16 @@ function bakeNumberOverlay(label, hot, skin, maps) {
   const mctx = maskC.getContext("2d");
   const { fs, ink, limit } = fitGlyph(mctx, label, size);
   const font = glyphFont(fs);
-  // Centre the INK box, not the em box. `left`/`right` and `ascent`/`descent`
-  // are measured from the alignment point, so these two offsets put the middle
-  // of the ink exactly on the middle of the texture -- which, after
-  // `projectFaceUVs`, is the middle of the face's inscribed circle. The old
-  // `cy + fs * 0.02` nudge was a by-eye correction for not doing this.
+  // Horizontally, centre the INK box, not the em box.
+  //
+  // Vertically, centre the CAP BAND -- baseline to cap line -- so the numeral
+  // sits where a reader puts it. Centring the ink box instead would push every
+  // descending digit upward by half its descender, drifting the baseline ~5 px
+  // between a "1" and a "5" on the same die. Descenders hang below; that is
+  // what they do on a page. The old `cy + fs * 0.02` nudge was a by-eye
+  // correction for centring neither.
   const gx = cx - (ink.right - ink.left) / 2;
-  const gy = cy + (ink.ascent - ink.descent) / 2;
+  const gy = cy + ink.ascent / 2;
 
   mctx.fillStyle = "#000";
   mctx.fillRect(0, 0, size, size);
@@ -660,11 +684,15 @@ function bakeNumberOverlay(label, hot, skin, maps) {
   overlayInk.set(`${skin.id}:${label}:${hot}`, {
     fs,
     limit,
-    // Offset of the rasterised ink box from the face's incentre, as a
-    // fraction of TEX_FACE, and the ink's height and width in the same units.
+    // All as fractions of TEX_FACE.
+    //   cap -- baseline to the topmost rasterised ink. THE SIZE GATE.
+    //   box -- the whole ink box, cap plus any descender. Context only.
+    //   dx/dy -- the CAP BAND's centre against the face's incentre, which is
+    //            the middle of the texture after `projectFaceUVs`.
     dx: box ? (box.x - cx) / size : null,
-    dy: box ? (box.y - cy) / size : null,
-    cap: box ? box.h / size : null,
+    dy: box ? ((box.top + gy) / 2 - cy) / size : null,
+    cap: box ? (gy - box.top) / size : null,
+    box: box ? box.h / size : null,
     wide: box ? box.w / size : null,
   });
   const glyph = new Float32Array(size * size);
@@ -911,7 +939,12 @@ function faceMaterial(label, hot, skin, cornerUv = LEGACY_CORNER_UV) {
   const emissiveMap = texFrom(overlay.emissive);
   const normalMap = linTex(overlay.normal);
   const roughnessMap = linTex(overlay.roughness);
-  const metalnessMap = linTex(maps.metalness, true);
+  // ClampToEdge, like every other sampler here. It was RepeatWrapping, which
+  // was harmless only because the old mapping kept every UV inside [0.04,
+  // 0.96]. The incircle mapping sends a triangle's corners to 1.34 and the
+  // d10's to 1.60, so a repeating sampler would tile there -- a seam across
+  // the corner of every triangular face the moment the map carries structure.
+  const metalnessMap = linTex(maps.metalness);
   map.colorSpace = THREE.SRGBColorSpace;
   emissiveMap.colorSpace = THREE.SRGBColorSpace;
   const mat = new THREE.MeshPhysicalMaterial({
@@ -957,7 +990,19 @@ function faceTangentBasis(normal) {
   return { n, texUp, texRight };
 }
 
-function faceUvBasis(kind, a, b, c, normal) {
+/**
+ * FROZEN. The basis `plump`'s corner ramp is quantised in, and nothing else.
+ *
+ * This used to place the numerals too, which is why it looks like a texture
+ * function. It is not one any more -- see `glyphFaceBasis`. It survives
+ * because the ramp's float32 round trip happens per UV COMPONENT, so it is not
+ * rotation-invariant: re-deriving the same ramp in a rotated basis changes it
+ * in the last bits, and `debug().geom.positionHash` is an absolute gate. The
+ * shipped physics certification was measured against these hulls.
+ *
+ * Read it as physics, not as art. Nothing here may change.
+ */
+function rampFaceBasis(kind, a, b, c, normal) {
   const n = normal.clone().normalize();
   if (kind === "d6") return faceTangentBasis(n);
   const up = triangleMedianUp([a.x, a.y, a.z], [b.x, b.y, b.z], [c.x, c.y, c.z]);
@@ -968,6 +1013,62 @@ function faceUvBasis(kind, a, b, c, normal) {
   texUp.normalize();
   const texRight = new THREE.Vector3().crossVectors(texUp, n);
   if (texRight.lengthSq() < 1e-8) return faceTangentBasis(n);
+  texRight.normalize();
+  texUp.crossVectors(n, texRight).normalize();
+  return { n, texUp, texRight };
+}
+
+// The die's own downward axis, tried in order. The first that does not lie
+// along a face's normal decides which way is "down" on that face; a face
+// square to one axis is resolved by the next. See `edgeAlignedUp` for why the
+// die needs an axis at all: a regular face is symmetric, so nothing intrinsic
+// to it can choose between its edges.
+const DOWN_AXES = [
+  new THREE.Vector3(0, -1, 0),
+  new THREE.Vector3(0, 0, -1),
+  new THREE.Vector3(-1, 0, 0),
+];
+
+/**
+ * Which way is up for the numeral on this face -- derived, never tabulated.
+ *
+ * The old basis pointed the glyph at whichever of the face's first THREE
+ * vertices happened to be highest at build time, then twisted it by a per-die
+ * constant (d8 -7.5 deg, d10 -6, d12 +5, d20 -7.5). Three things wrong with
+ * that: the twist put every numeral a few degrees off its own edges; "the
+ * first three vertices" is a sub-triangle of the d12's pentagon, not the face;
+ * and the d6 skipped it entirely for a world-axis projection. Cam saw all
+ * three at once -- "they're all a bit cockeyed".
+ *
+ * Now the face's real outline picks a bottom edge and the baseline runs
+ * parallel to it. See `edgeAlignedUp` for the convention.
+ */
+function glyphFaceBasis(verts, normal) {
+  const n = normal.clone().normalize();
+  const provisional = faceTangentBasis(n);
+  const ring = uniquePolygon(verts.map((p) => [p.dot(provisional.texRight), p.dot(provisional.texUp)]));
+  if (ring.length < 3) return provisional;
+  const { c } = polygonIncentre(ring);
+
+  let down = null;
+  for (const axis of DOWN_AXES) {
+    const d = axis.clone().projectOnPlane(n);
+    if (d.lengthSq() < 1e-6) continue;
+    d.normalize();
+    down = [d.dot(provisional.texRight), d.dot(provisional.texUp)];
+    break;
+  }
+  if (!down) return provisional;
+
+  const { up } = edgeAlignedUp(ring, c, down);
+  const texUp = provisional.texRight
+    .clone()
+    .multiplyScalar(up[0])
+    .add(provisional.texUp.clone().multiplyScalar(up[1]));
+  if (texUp.lengthSq() < 1e-8) return provisional;
+  texUp.normalize();
+  const texRight = new THREE.Vector3().crossVectors(texUp, n);
+  if (texRight.lengthSq() < 1e-8) return provisional;
   texRight.normalize();
   texUp.crossVectors(n, texRight).normalize();
   return { n, texUp, texRight };
@@ -988,12 +1089,14 @@ function faceUvBasis(kind, a, b, c, normal) {
  * d8, d10, d20 -- were off by more, because the mean of a triangle's corners
  * is never where a circle fits inside it.
  *
- * The RAMP is old, deliberately and to the bit. See RAMP_QUANT_SPAN: it is the
- * same quantity `plump` read out of the `uv` attribute before this change,
- * computed from geometry and quantised the way the Float32Array quantised it,
- * so the collision hull does not move.
+ * The RAMP is old, deliberately and to the bit, and it is computed in its own
+ * frozen basis (`rampFaceBasis`) rather than the glyph's. See RAMP_QUANT_SPAN:
+ * it is the same quantity `plump` read out of the `uv` attribute before this
+ * change, quantised the way the Float32Array quantised it. That quantisation
+ * is per component, so it is NOT rotation-invariant -- re-deriving the ramp in
+ * the glyph's basis would move the hull. Two bases, one projection each.
  */
-function projectFaceUVs(geo, start, count, texUp, texRight) {
+function projectFaceUVs(geo, start, count, glyph, ramp) {
   const pos = geo.attributes.position;
   const uv = geo.attributes.uv;
   const dots = [];
@@ -1001,8 +1104,8 @@ function projectFaceUVs(geo, start, count, texUp, texRight) {
   let cv = 0;
   for (let i = 0; i < count; i++) {
     const p = new THREE.Vector3().fromBufferAttribute(pos, start + i);
-    const u = p.dot(texRight);
-    const v = p.dot(texUp);
+    const u = p.dot(ramp.texRight);
+    const v = p.dot(ramp.texUp);
     dots.push({ i: start + i, u, v });
     cu += u;
     cv += v;
@@ -1018,23 +1121,29 @@ function projectFaceUVs(geo, start, count, texUp, texRight) {
   // per COMPONENT, before the hypot, not after it.
   let maxR = 0.0001;
   for (const d of dots) maxR = Math.max(maxR, Math.hypot(d.u - cu, d.v - cv));
-  const ramp = dots.map((d) => {
+  const weights = dots.map((d) => {
     const qu = Math.fround(0.5 + ((d.u - cu) / maxR) * RAMP_QUANT_SPAN) - 0.5;
     const qv = Math.fround(0.5 + ((d.v - cv) / maxR) * RAMP_QUANT_SPAN) - 0.5;
     return { i: d.i, w: Math.hypot(qu, qv) / RAMP_QUANT_SPAN };
   });
 
-  // The new mapping.
-  const { c, r } = polygonIncentre(uniquePolygon(dots.map((d) => [d.u, d.v])));
+  // The mapping, in the GLYPH basis: incentre to the middle of the texture,
+  // inradius to INCIRCLE_UV, and the face's bottom edge horizontal.
+  const face = [];
+  for (let i = 0; i < count; i++) {
+    const p = new THREE.Vector3().fromBufferAttribute(pos, start + i);
+    face.push([p.dot(glyph.texRight), p.dot(glyph.texUp)]);
+  }
+  const { c, r } = polygonIncentre(uniquePolygon(face));
   const scale = INCIRCLE_UV / Math.max(r, 1e-6);
   let cornerUv = 0;
-  for (const d of dots) {
-    const du = (d.u - c[0]) * scale;
-    const dv = (d.v - c[1]) * scale;
+  for (let i = 0; i < count; i++) {
+    const du = (face[i][0] - c[0]) * scale;
+    const dv = (face[i][1] - c[1]) * scale;
     cornerUv = Math.max(cornerUv, Math.hypot(du, dv));
-    uv.setXY(d.i, 0.5 + du, 0.5 + dv);
+    uv.setXY(start + i, 0.5 + du, 0.5 + dv);
   }
-  return { ramp, cornerUv };
+  return { ramp: weights, cornerUv };
 }
 
 /**
@@ -1147,11 +1256,14 @@ function prepareFaces(kind, skin) {
     const a = new THREE.Vector3().fromBufferAttribute(pos, start);
     const b = new THREE.Vector3().fromBufferAttribute(pos, start + 1);
     const c = new THREE.Vector3().fromBufferAttribute(pos, start + 2);
-    const { texUp, texRight } = faceUvBasis(kind, a, b, c, normals[f]);
-    const projected = projectFaceUVs(geo, start, count, texUp, texRight);
+    const verts = [];
+    for (let i = 0; i < count; i++) verts.push(new THREE.Vector3().fromBufferAttribute(pos, start + i));
+    const glyph = glyphFaceBasis(verts, normals[f]);
+    const ramp = rampFaceBasis(kind, a, b, c, normals[f]);
+    const projected = projectFaceUVs(geo, start, count, glyph, ramp);
     for (const { i, w } of projected.ramp) cornerRamp[i] = w;
     cornerUv = Math.max(cornerUv, projected.cornerUv);
-    faceUps.push(texUp);
+    faceUps.push(glyph.texUp);
   }
 
   // After the loop, not inside it: the wear shader needs this die's corner
@@ -1166,13 +1278,17 @@ function prepareFaces(kind, skin) {
   plump(geo, skin.plump, cornerRamp);
   const pos2 = geo.attributes.position;
   for (let f = 0; f < faceCount; f++) {
-    const start = starts[f].start;
+    const { start, count } = starts[f];
     const a = new THREE.Vector3().fromBufferAttribute(pos2, start);
     const b = new THREE.Vector3().fromBufferAttribute(pos2, start + 1);
     const c = new THREE.Vector3().fromBufferAttribute(pos2, start + 2);
     new THREE.Triangle(a, b, c).getNormal(normals[f]).normalize();
-    const basis = faceUvBasis(kind, a, b, c, normals[f]);
-    faceUps[f] = basis.texUp;
+    // `faceUps` must be the GLYPH's up: it is what `revealCamera` aims the
+    // screen's up at, and what `debug().glyphDeg` measures. Recomputed on the
+    // plumped vertices, because those are the ones the player sees.
+    const verts = [];
+    for (let i = 0; i < count; i++) verts.push(new THREE.Vector3().fromBufferAttribute(pos2, start + i));
+    faceUps[f] = glyphFaceBasis(verts, normals[f]).texUp;
   }
   geo.computeVertexNormals();
 
