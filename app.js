@@ -1,6 +1,6 @@
-import { createDiceStage, formatFace } from "./dice3d.js?v=reveal-cam1";
-import { pickHortQuote } from "./quotes.js?v=reveal-cam1";
-import { composeShareStill } from "./share-card.js?v=reveal-cam1";
+import { createDiceStage, formatFace } from "./dice3d.js?v=hand-throw1";
+import { pickHortQuote } from "./quotes.js?v=hand-throw1";
+import { composeShareStill } from "./share-card.js?v=hand-throw1";
 
 const envFilm = document.querySelector("#env-film");
 const form = document.querySelector("#war-table");

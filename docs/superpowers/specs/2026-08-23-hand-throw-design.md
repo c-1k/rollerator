@@ -322,8 +322,15 @@ and d20 — the two roundest solids, which roll rather than settle — down to
 
 ## 5. Replay: real time, interpolated
 
-- `slowMoScale` is removed from `stepRoll`. The replay clock is
-  `st.replayT += dt` — 1×, always.
+- `slowMoScale` is removed from `stepRoll`. The replay runs at 1×, always.
+  The clock is **wall time, not the render `dt`**: `tick` clamps `dt` at
+  50 ms, and advancing the replay by that clamped value re-introduced the
+  slow-motion defect through the back door — on any renderer below 20 fps the
+  replay clock falls behind the wall clock and the throw plays slow (measured
+  0.30–0.73× under SwiftShader). `stepRoll` reads the wall clock directly,
+  capped at 250 ms so a backgrounded tab cannot fast-forward the whole throw
+  on its first frame back; interpolation makes the larger steps smooth.
+  Corrected 2026-08-23 (Task 5) — this bullet said `st.replayT += dt`.
 - Frames are interpolated: with `i = floor(replayT / physStep)` and
   `f = (replayT / physStep) − i`, the displayed pose is
   `interpolateFrame(frames[i], frames[i + 1], f)` — position lerp, quaternion
@@ -409,74 +416,169 @@ dead if nothing else reaches it.
 ### Browser (`e2e/roll.spec.js`)
 Per die, after the existing invariant-2/3 assertions (which stay exactly as
 they are):
-- `flightMs ≤ 2000` and `≥ 400` (a throw, not a drop-and-stop).
-- `1 ≤ bounces ≤ 4`.
+- `flightMs ≥ 300` and **strictly `< FLIGHT_MAX_MS`**, imported from the
+  profile rather than restated. Not a click ceiling: `flightMs` comes out of
+  the silent simulation, which stops itself at `THROW.flightMaxMs`, so any
+  literal at or above that is unreachable and asserts nothing. What this
+  catches is the sim hitting its own cap — the die never rested and the
+  frames end mid-throw. The floor is 300 rather than 400 because a d4's tail
+  reaches 367 ms: a tetrahedron lands on a big flat face and stops.
+- `1 ≤ bounces ≤ 6`.
 - `heldFrames === 0`.
 - `landedPos` inside the ring: `hypot(x, z) ≤ arena.radius − (0.82 + 0.3)`,
   read off `debug().arena` rather than restated, so the assertion cannot stop
   meaning "clear of the wall" the moment the arena is tuned.
+- A rest is **on the floor**: `landedPos[1] ≤ dieHeight`. This looks
+  tautological and is not — at the apex of an authored hop the vertical
+  velocity is zero and the horizontal is capped, so a low-spin throw could
+  satisfy a pure speed test in mid-air and be presented floating.
+- The die is presented **where it landed**: `|meshPos − landedPos| < 1e-3` on
+  each axis. A re-introduced slide fails here.
 - Both authored hops fired (`kicks === 2`), the first rose 3.2–4.8
   die-heights, the second 1.5–2.5, and the second came in under the first.
+  The bands are wider than the soak's (3.5–4.5 / 1.7–2.3) because this is one
+  roll per die and a rare contact-eaten kick should not turn the suite red.
+- The presented numeral reads upright (`glyphDeg`), asserted as a
+  silent-regression check — it has been true by construction since sub-spec 1.
 - The settled die clears the quote card: its projected bottom edge sits above
-  the card's top edge by more than 4 % of the viewport height (§3).
+  the card's top edge by more than 4 % of the viewport height (§3), asserted
+  in **both** landscape and portrait.
 - `phase === "idle"` pin stays.
 
 The resize test: `aim` is now `lastRoll.landedPos`; assert
 `|reveal.position − landedPos| === revealDistance` (within 1e-2) instead of
 the hardcoded `[0, 0.4, 0]` / `8.8`.
 
-### Throw-feel soak (plan tuning task, not CI)
-A throwaway script rolls each die 10× headless and prints the distribution of
-`flightMs`, `bounces`, `wallHits`, `landedPos`. Tuning moves `THROW` until
-§9 passes across the distribution, then the final profile is written back
-into §4.
+### Throw-feel soak (`scripts/throw-soak.mjs` — not CI)
+Not a throwaway: this is the instrument §9 is measured on. It rolls each of
+the seven dice N times headless and holds the distribution of `flightMs`,
+`bounces`, `apex`/`apex2`, `wallHits`, `heldFrames`, `cockedDeg`, the resting
+radius and the raw click-to-number time against `BOUNDS`, exiting non-zero on
+a breach. `--fast` runs the silent simulation only and **cannot certify**:
+`heldFrames` and the click-to-number time are not measured there, and the
+script says so in its own header. Certification is a full-mode run at N=20 —
+N=10 cannot resolve the bounds (an identical config scored 2 vs 5 violations
+across two N=20 runs).
 
 ### Mutation controls
-- Re-introduce `slowMoScale` on the replay clock → `heldFrames > 0` must fail
-  the suite (proves the detector sees the old defect).
-- Re-introduce a position lerp toward the centre in the tail → the resize
-  test's `|reveal.position − landedPos|` check must fail.
-- The two sub-spec 1 controls (tail / hold yaw) must still fail invariant 3.
+Each is applied, run once, confirmed to fail with the message named, and
+reverted; `grep -c "MUTATION CONTROL" dice3d.js` must return 0 afterwards.
+
+- **Slow-mo.** Scale the replay's wall-clock advance (× 0.22) **and** replace
+  the interpolated pose with the floor-index frame,
+  `interpolateFrame(frames[i], frames[i], 0)` → `heldFrames` must go above 0
+  and fail `"the replay stuttered"`. Both halves are needed: the scaled clock
+  alone will not bite, because interpolation gives a *different* pose on every
+  tick however slowly the clock advances, which is exactly what the
+  interpolation was added to do. It is the held frame, not the slow clock,
+  that the detector sees. (Corrected 2026-08-23, Task 3 — this control
+  previously read "re-introduce `slowMoScale` on the replay clock".)
+- **The slide.** In `beginCrane`, pin the mesh to the centre
+  (`st.mesh.position.set(0, st.landedPos[1], 0)`) instead of `landedPos` →
+  the per-die `|meshPos − landedPos|` loop must fail `"was moved after
+  landing"`. That loop, not the resize test's
+  `|reveal.position − landedPos|` check, is the slide control: the resize
+  test derives the camera *from* `landedPos`, so a moved die moves the camera
+  with it and the check stays satisfied. (Corrected 2026-08-23, Task 4.)
+- **The two sub-spec 1 yaw controls** (a `mesh.rotateY(0.3)` after the
+  interpolated pose is applied in the replay branch; the same in
+  `lockSettleFrame`) must each still fail invariant 3.
 
 ## 9. Acceptance
 
-> **The numbers in this section are stale and Task 6 owns rewriting it.**
-> Everything below the quote block predates the cylinder-and-slam pass and
-> several rulings after it; do not read any figure here as shipped.
->
-> **`scripts/throw-soak.mjs` (`BOUNDS`) is the source of truth**, with
-> `e2e/roll.spec.js` holding the single-roll versions. Read them there rather
-> than from a restatement that has now gone stale twice. In outline, as of
-> 2026-08-23: both hops authored and bounded (`bounceHeights`), `bounces`
-> 1–6, `wallHits` ≤ 1, `heldFrames` 0, a radial landing bound read off
-> `debug().arena`, a resting height on the floor, flight median ≤ 1700 and
-> **p95 ≤ 2200**, and click-to-number **≤ 2900 ms**.
->
-> Two of those carry rulings worth naming. The flight p95 was raised
-> 2000 → 2200 because the click ceiling is the bound that actually binds and
-> a tighter p95 was failing runs whose every click was comfortably inside it.
-> The resting-radius rows are **advisory**: they say whether a result reads
-> as centred, which Cam judges on screen, so the soak reports them and does
-> not fail on them. Containment is the gate; centring is a note.
->
-> The old text here also claimed `apex` was the one bound the profile missed.
-> That was true of a build two commits before the arena existed. The first
-> bounce is now authored and lands 3.85–4.02 die-heights, the second
-> 1.91–1.99, 100 % in band on all seven dice.
+Rewritten 2026-08-23 (Task 6). The previous text pointed at
+`scripts/throw-soak.mjs` as the source of truth and then restated it anyway,
+which is how it went stale twice. The numbers below **are** the shipped
+`BOUNDS`; if the two ever disagree, the script is what runs and this section
+is the bug.
 
-- `pnpm verify` exit 0 with the new assertions.
-- Across the soak (7 dice × 10 rolls): median `flightMs` 900–1700; 95th
-  percentile ≤ 2000; `bounces` 1–4 in ≥ 90 % of rolls; `heldFrames` 0 in
-  100 %; no roll ends inside a wall.
-- Number on screen (`#hort` visible) within **2.2 s** of clicking Roll,
-  measured in the browser (silent sim + replay + crane start). Today it is
-  ~6 s.
-- Three mutation controls run and failed as intended; output in the PR.
-- `pnpm shot d20 ice` and a contact sheet of the flight (`scripts/roll-strip.mjs`,
-  new: 8 frames across the replay into one PNG) opened and looked at: two or
-  three distinct bounces visible, no smeared/held frames, die at rest off
-  centre with the camera framing it.
-- Cam has watched it in his tab and said it reads as a throw.
+### The measuring instrument
+
+`scripts/throw-soak.mjs`, **full mode, N=20** — `node scripts/throw-soak.mjs 20`.
+Seven dice, 140 rolls, exit 0. `--fast` cannot certify: it skips the replay
+entirely, so `heldFrames` and the click-to-number time are not measured.
+N=10 cannot certify either — it does not resolve the bounds, and an identical
+config scored 2 violations on one N=20 run and 5 on another.
+
+### Gates (a breach fails the run)
+
+| bound | value | held over |
+|---|---|---|
+| median `flightMs` | 450–1700 ms | each die |
+| p95 `flightMs` | ≤ 2200 ms | each die |
+| `bounces` | 1–6 | ≥ 90 % of rolls |
+| first hop `apexHeights` | 3.5–4.5 die-heights | ≥ 90 % of rolls |
+| second hop `apex2Heights` | 1.7–2.3 die-heights | ≥ 90 % of rolls |
+| `wallHits` | ≤ 1 | ≥ 80 % of rolls |
+| `heldFrames` | 0 | 100 % |
+| `cockedDeg` (**resting** face) | ≤ 10° | 100 % |
+| rest height | ≤ 1.0 × die-height | 100 % |
+| landing radius | ≤ `arena.radius − (0.82 + 0.3)` | 100 % |
+| **click → number on screen** | **≤ 2900 ms** | every sample |
+
+Four of those carry rulings worth naming, because each one is a place where a
+number moved and the reason is not recoverable from the number.
+
+**The click ceiling, 2200 → 2500 → 2900.** Both raises were made on
+2026-08-23 and both bought something a player can see rather than slack.
+2500 paid for `REST_BEAT_MS`, Cam's beat of stillness before the result: a
+deterministic 300 ms added after the die is already down, which shifts every
+figure by the same amount and gives nothing back. 2900 pays for
+`THROW.righting` — every nudge injects spin that must decay back under
+`rest.ang` before the sim will stop, charged straight to this budget. The
+alternatives were to loosen the tilt tolerance or cut the reserved attempts,
+and both leak the visible cocked rest that righting exists to fix. The ruling
+took the latency. This is the bound that actually binds the user experience,
+and everything else yields to it.
+
+**`cockedDeg` gates the RESTING face, not the presented one.** A d10 resting
+perfectly flat presents its numeral on a face tilted 20–31°, because a
+trapezohedron's faces are not parallel to the ones opposite them. Gating the
+presented face would have tried to right dice that were already flat. The
+tolerance is 10° rather than 5° because a die resting honestly flat scores
+0.2–3° on every solid in the set, Cam's complaint was at 15–20°, and gating
+at 5 fired on twice as many rolls for tilts no one can see.
+
+**p95 `flightMs` 2000 → 2200.** The click ceiling is the binding bound, and a
+p95 tighter than it was failing runs whose every click was comfortably inside
+it — the p95 was measuring the instrument, not the throw.
+
+**`bounces` widened 1–5 → 1–6.** Reinstated once the goal changed to authored
+hops: a bigger first leap legitimately adds a counted contact on the way down.
+
+### Advisory (reported, never fatal)
+
+| metric | target |
+|---|---|
+| resting radius, median | ≤ 1.2 |
+| resting radius, p95 | ≤ 2.0 |
+
+These say whether a result reads as **centred**, which is Cam's call on
+screen, not a bound a run should die on. Containment — the radial landing
+gate above — is what is enforced; centring is a note. They are advisory for a
+measurement reason as well as a taste one: one profile's d10 measured
+0.61–1.51 across four runs, so the band is tighter than N=20 noise resolves,
+and a gate on it fails at random. The soak prints them with their targets
+either way. A run whose only breaches are these rows exits 0, and that is the
+intended behaviour, not a hole.
+
+### The rest of the gate
+
+- `pnpm verify` exit 0 — lint, unit, and the browser suite with the §8
+  assertions.
+- The four mutation controls of §8 applied, each failing with the message
+  named there, each reverted, `grep -c "MUTATION CONTROL" dice3d.js` → 0.
+- `grep -c slowMoScale` across the tree → 0: the constant, its uses and its
+  tests are gone, not merely unreferenced.
+- `pnpm run shot d20 ice` and `scripts/roll-strip.mjs` (eight frames across
+  the flight into one contact sheet) **opened and looked at**: a big first
+  leap, a clearly smaller second hop, visible spin throughout the flight and
+  the tail, no smeared or held frames, and a readable rest. The suites prove
+  a legal face was reported and nothing threw; neither of them can see the
+  picture.
+- Cam has watched it in his tab and said it reads as a throw. Every tuning
+  ruling on this sub-spec came out of him watching it live, so this is the
+  gate the others exist to protect, not a formality.
 
 ## 10. Out of scope
 
