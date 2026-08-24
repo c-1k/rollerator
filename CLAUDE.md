@@ -70,13 +70,25 @@ still *runs*, which is why they are written down.
    that has nothing to build. `package.json` is also listed in `.vercelignore`
    as a second line of defence.
 
+8. **The throw is one profile.** Every tunable lives in `THROW` in
+   `physics-roll.js`; the replay runs at 1x and interpolates between recorded
+   frames -- never scale the replay clock. The clock is wall time (capped at
+   250 ms so a backgrounded tab cannot fast-forward the throw), not the
+   render `dt`: advancing by `dt` makes the throw run in slow motion on any
+   renderer below 20 fps, which is how the old defect came back the second
+   time. `heldFrames` in `debug()` is the detector and it must read 0.
+
 > **Reveal camera (2026-08-22).** The physics port landed; the post-settle
 > yaw it carried was removed by the reveal camera —
 > `docs/superpowers/specs/2026-08-22-reveal-camera-design.md`. After the body
 > sleeps nothing writes `mesh.quaternion` while a result is presented;
 > `abortRoll()` returns the die to the upright idle pose only once the result
 > is dismissed. `revealCamera()` in `physics-roll.js` places the camera
-> instead. `e2e/roll.spec.js` asserts it.
+> instead. Two specs own this behaviour and both are live:
+> `docs/superpowers/specs/2026-08-22-reveal-camera-design.md` for the reveal,
+> and `docs/superpowers/specs/2026-08-23-hand-throw-design.md` for the hand
+> throw that feeds it -- the cylinder, the slam, the two authored hops and the
+> beat of stillness before the number. `e2e/roll.spec.js` asserts both.
 
 ## Commands
 

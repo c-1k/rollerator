@@ -6,27 +6,33 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import * as CANNON from "cannon-es";
-import { createRollController } from "./roll-engine.js?v=reveal-cam1";
+import { createRollController } from "./roll-engine.js?v=hand-throw1";
 import {
+  CRANE_MS,
   FACE_UV_YAW,
   FLIGHT_MAX_MS,
   GRAVITY_Y,
   HOLD_MS,
+  REST_BEAT_MS,
+  THROW,
+  arenaPlanes,
   faceValueTable,
+  interpolateFrame,
   isSleepy,
   landedValue,
+  reboundSpeed,
+  riseVelocityAt,
   restOffsetY,
   revealCamera,
   rotateAround,
   rotateByQuat,
-  slowMoScale,
   smoothProgress,
   snapQuaternion,
   throwPose,
   triangleMedianUp,
   uniqueVertsAndFaces,
   upwardFaceIndex,
-} from "./physics-roll.js?v=reveal-cam1";
+} from "./physics-roll.js?v=hand-throw1";
 
 const DIE_SCALE = 0.72;
 const TEX_BODY = 2048;
@@ -980,10 +986,23 @@ export function createDiceStage(canvas, video) {
   // Reveal tilt off the vertical. Chosen 2026-08-22 from real renders at
   // 0 / 15 / 25 degrees; see the spec's decision record (section 8).
   const REVEAL_TILT = (15 * Math.PI) / 180;
-  const TAIL_MS = 1600;
   const camera = new THREE.PerspectiveCamera(IDLE_FOV, 1, 0.1, 80);
   const idleCam = new THREE.Vector3(0, 8.2, 0);
   const dropCam = new THREE.Vector3(0, 13.6, 0);
+  // How high above the rest the reveal camera ends, which IS the eye-to-aim
+  // distance once the rest height is taken off. It used to be `idleCam.y`:
+  // the crane stopped at the idle height and the settled die sat small in a
+  // wide empty floor -- about 27% of the frame's narrow axis. Cam asked on
+  // 2026-08-23 for the die closer to the viewer, so the crane now ends its
+  // own distance rather than borrowing the idle one.
+  //
+  // The bound is the die staying inside the NARROW axis at every azimuth.
+  // At PRESENT_FOV 44 the half-extent at the aim plane is d*tan(22) on the
+  // vertical and d*tan(22)*aspect on the horizontal, so the narrow one is
+  // d*0.404*min(1, aspect); the die's own circumradius is 0.82. These lifts
+  // put the die at ~41% of the narrow axis in both orientations -- half again
+  // as large as before, with better than 2x of margin left to the frame edge.
+  let revealLift = 5.6;
   const SETTLE_AIM = new THREE.Vector3(0, 0.4, 0);
   let settleY = 0.62;
   camera.up.set(0, 0, -1);
@@ -997,36 +1016,62 @@ export function createDiceStage(canvas, video) {
   world.broadphase = new CANNON.SAPBroadphase(world);
   world.solver.iterations = 20;
   world.allowSleep = true;
-  world.defaultContactMaterial.friction = 0.42;
-  world.defaultContactMaterial.restitution = 0.34;
 
   const diceMat = new CANNON.Material("dice");
   const tableMat = new CANNON.Material("table");
+  // The ring gets its own material so it can be DEAD without softening the
+  // floor: the floor is where the throw's energy is meant to go.
+  const wallMat = new CANNON.Material("wall");
+  const dieContact = new CANNON.ContactMaterial(diceMat, tableMat, {
+    friction: THROW.contact.friction,
+    restitution: THROW.contact.restitution,
+    contactEquationStiffness: 4e6,
+    contactEquationRelaxation: 3,
+  });
+  world.addContactMaterial(dieContact);
   world.addContactMaterial(
-    new CANNON.ContactMaterial(diceMat, tableMat, {
-      friction: 0.4,
-      restitution: 0.42,
+    new CANNON.ContactMaterial(diceMat, wallMat, {
+      friction: THROW.contact.wall.friction,
+      restitution: THROW.contact.wall.restitution,
       contactEquationStiffness: 4e6,
       contactEquationRelaxation: 3,
     })
   );
 
-  function addPlane(normal, x, y, z) {
-    const body = new CANNON.Body({ mass: 0, material: tableMat });
+  /** How bouncy THIS die is: its own override, or the profile's default. */
+  function restitutionFor(k) {
+    return THROW.contact.restitutionByKind?.[k] ?? THROW.contact.restitution;
+  }
+
+  function addPlane(normal, x, y, z, material = tableMat) {
+    const body = new CANNON.Body({ mass: 0, material });
     body.addShape(new CANNON.Plane());
     body.quaternion.setFromVectors(new CANNON.Vec3(0, 0, 1), new CANNON.Vec3(normal[0], normal[1], normal[2]));
     body.position.set(x, y, z);
     world.addBody(body);
+    return body;
   }
-  addPlane([0, 1, 0], 0, 0, 0);
-  addPlane([-1, 0, 0], 1.72, 0, 0);
-  addPlane([1, 0, 0], -1.72, 0, 0);
-  addPlane([0, 0, -1], 0, 0, 1.62);
-  addPlane([0, 0, 1], 0, 0, -1.62);
-  addPlane([0, -1, 0], 0, 9.4, 0);
+  const floorBody = addPlane([0, 1, 0], 0, 0, 0);
+  // The arena: an invisible cylinder, approximated by a ring of planes
+  // because cannon-es has no infinite cylinder. Not scenery -- the backdrop
+  // is a 2D film and the camera frames the die wherever it lands -- so its
+  // radius is a throw tunable and lives in THROW with the rest of them.
+  // A circle replaced the old four-walled tray because a corner returns a die
+  // twice and reads, over a backdrop with nothing drawn there, as a bounce
+  // off empty air.
+  const wallBodies = arenaPlanes(THROW.arena.radius, THROW.arena.planes).map((w) =>
+    addPlane(w.normal, w.position[0], w.position[1], w.position[2], wallMat)
+  );
+  // The lid. The authored first bounce peaks near y = 7.5; this is the
+  // backstop for a throw that somehow beats it, and it is dead like the ring.
+  addPlane([0, -1, 0], 0, 11.5, 0, wallMat);
 
+  // The shadow catcher. Not scenery: it does not have to reach the wall, it
+  // has to be under the die wherever the die can STOP, plus the die's own
+  // 0.82 of shadow. At THROW.arena.radius 4.0 that is 3.70 and this is 5.0.
+  // Grow it with the ring -- the arithmetic is in physics-roll.js.
   const catcher = new THREE.Mesh(
-    new THREE.CircleGeometry(3.4, 48),
+    new THREE.CircleGeometry(5.0, 64),
     new THREE.ShadowMaterial({ color: 0x000000, opacity: 0.42 })
   );
   catcher.rotation.x = -Math.PI / 2;
@@ -1098,6 +1143,13 @@ export function createDiceStage(canvas, video) {
   let die = null;
   let dieBody = null;
   let localVerts = [];
+  // One die-height, the unit the authored first bounce is measured in: the
+  // circumsphere DIAMETER of the body actually in the world (the hull verts,
+  // already scaled by DIE_SCALE). Chosen over the resting height because it
+  // is a property of the solid and not of the face it happens to land on --
+  // a tetrahedron's resting height is a third of a d20's for the same die.
+  // It runs 1.61 (d4) to 1.76 (d100), so "4 die-heights" is 6.4 to 7.0 units.
+  let dieHeight = 1.64;
   let kind = "d20";
   let envName = "siege";
   let rolling = false;
@@ -1107,7 +1159,15 @@ export function createDiceStage(canvas, video) {
   let lastRoll = null;
   let camTween = 0;
   let lastTick = performance.now();
-  const PHYS_STEP = 1 / 60;
+  const PHYS_STEP = THROW.physStep;
+  // How much looser than "at rest" counts as "settling" for righting. See the
+  // note at the righting check.
+  const SETTLE_SLACK = 3;
+  const IMPACT_SPEED_FLOOR = THROW.bounceSpeed;
+  // How long after a counted impact further contacts belong to the same one.
+  // Well above PHYS_STEP (8.3 ms), so the contact points of one landing always
+  // collapse together; well below the gap between real bounces.
+  const BOUNCE_REFRACTORY_MS = 40;
   const rolls = createRollController();
   let camFrom = idleCam.clone();
   let camTo = idleCam.clone();
@@ -1143,19 +1203,22 @@ export function createDiceStage(canvas, video) {
     const portrait = camera.aspect < 0.86;
     idleCam.set(0, portrait ? 9.2 : 8.2, 0);
     dropCam.set(0, portrait ? 15.2 : 13.6, 0);
+    // Portrait is framed by its width, which is the shorter side, so it needs
+    // the extra unit to hold the same die-to-frame ratio as landscape.
+    revealLift = portrait ? 6.6 : 5.6;
     if (rollState?.reveal) {
-      // Any phase, not just hold: the tail reads st.reveal every frame, so a
+      // Any phase, not just hold: the crane reads st.reveal every frame, so a
       // resize mid-flight has to re-derive it or the landing stays framed for
       // the old aspect for the rest of the roll.
-      rollState.reveal = computeReveal(rollState.mesh, rollState.index, rollState.landedQuat);
+      rollState.reveal = computeReveal(rollState.mesh, rollState.index, rollState.landedQuat, rollState.landedPos);
       if (lastRoll) lastRoll.reveal = rollState.reveal;
     }
     if (!rolling) {
-      if (lastRoll?.reveal && die) {
+      if (lastRoll?.reveal && lastRoll.landedPos && die) {
         // A result is still on the table. The die keeps its rest pose, so the
         // idle overhead shot would show the numeral crooked -- re-frame the
         // reveal for the new aspect instead.
-        lastRoll.reveal = computeReveal(die, lastRoll.index, lastRoll.landedQuat);
+        lastRoll.reveal = computeReveal(die, lastRoll.index, lastRoll.landedQuat, lastRoll.landedPos);
         placeCamera(lastRoll.reveal);
         setFov(PRESENT_FOV);
       } else {
@@ -1166,19 +1229,47 @@ export function createDiceStage(canvas, video) {
     }
   }
 
-  /** Eye-to-aim distance of the reveal: today's idle height above the aim point. */
-  function revealDistance() {
-    return idleCam.y - SETTLE_AIM.y;
+  /** Eye-to-aim distance of the reveal: `revealLift` above the aim point. */
+  function revealDistance(landedPos) {
+    return revealLift - landedPos[1];
   }
 
-  /** The camera pose that presents face `index` of a die resting at `landedQuat`. */
-  function computeReveal(mesh, index, landedQuat) {
+  // How far above frame centre the settled die sits, as a fraction of frame
+  // height. The quote card is a band across the bottom of the page and a die
+  // presented dead-centre lands under it -- Cam, 2026-08-23, after the closer
+  // crane landed: "I don't want the quote card overlapping with the die".
+  // The size of the lift is set by the WORST card, not the typical one, and
+  // that is the whole reason it is 0.20 rather than 0.16. The die's projected
+  // bottom edge is essentially fixed -- measured 491-497 px at 1280x900
+  // across d4/d10/d20/d100 -- while the card is bottom-anchored and grows
+  // upward as the quote wraps, so its top edge moves in discrete steps with
+  // the line count: 130 px tall -> top at 567, 153 -> 545, 159 -> 538,
+  // 182 -> 516. At 0.16 the three shorter cards cleared by 4.7-9.3% of
+  // viewport height and the four-line one by only 2.3-2.6%, which is the die
+  // very nearly touching the quote. 0.20 lifts the die a further 4% of frame
+  // height and clears even that card, while leaving its top edge around 12%
+  // down the frame -- nowhere near the top.
+  const REVEAL_RISE = 0.2;
+
+  /**
+   * `REVEAL_RISE` converted from a fraction of frame height into world units
+   * at the aim plane, which is what revealCamera's `rise` wants. Half the
+   * frame height there is distance * tan(fov/2).
+   */
+  function revealRise(distance) {
+    return REVEAL_RISE * 2 * distance * Math.tan((PRESENT_FOV * Math.PI) / 360);
+  }
+
+  /** The camera pose that presents face `index` of a die resting at `landedQuat`, at `landedPos`. */
+  function computeReveal(mesh, index, landedQuat, landedPos) {
     const t = mesh.userData.faceUps[index];
     const texUpWorld = rotateByQuat([t.x, t.y, t.z], landedQuat);
+    const distance = revealDistance(landedPos);
     return revealCamera(texUpWorld, {
       tilt: REVEAL_TILT,
-      distance: revealDistance(),
-      aim: [SETTLE_AIM.x, SETTLE_AIM.y, SETTLE_AIM.z],
+      distance,
+      aim: landedPos,
+      rise: revealRise(distance),
     });
   }
 
@@ -1240,12 +1331,15 @@ export function createDiceStage(canvas, video) {
       mass: 0.34,
       material: diceMat,
       allowSleep: true,
-      sleepSpeedLimit: 0.22,
-      sleepTimeLimit: 0.55,
-      linearDamping: 0.012,
-      angularDamping: 0.035,
+      sleepSpeedLimit: THROW.sleep.speedLimit,
+      sleepTimeLimit: THROW.sleep.timeLimit,
+      linearDamping: THROW.damping.linear,
+      angularDamping: THROW.damping.angular,
     });
     dieBody.addShape(shape);
+    let far = 0;
+    for (const v of localVerts) far = Math.max(far, Math.hypot(v[0], v[1], v[2]));
+    dieHeight = far > 0 ? 2 * far * DIE_SCALE : 1.64;
     dieBody.ccdSpeedThreshold = 1.2;
     dieBody.ccdSweptSphereRadius = 0.28;
     world.addBody(dieBody);
@@ -1389,10 +1483,6 @@ export function createDiceStage(canvas, video) {
     heatedIndex = -1;
   }
 
-  function sitY(quat) {
-    return Math.max(0.08, restOffsetY(localVerts, [quat.x, quat.y, quat.z, quat.w], DIE_SCALE) - 0.02);
-  }
-
   function meshNormals(mesh) {
     return mesh.userData.normals.map((n) => [n.x, n.y, n.z]);
   }
@@ -1436,25 +1526,139 @@ export function createDiceStage(canvas, video) {
     mesh.userData.swappedPair = [idx, j];
   }
 
+  /**
+   * The angle between the presented face's normal and world-up, in degrees.
+   * Zero is dead flat. This is the number a "cocked" die scores high on.
+   */
+  function faceTiltDeg(mesh, index, quat, axisY) {
+    const n = mesh.userData.normals[index];
+    const w = rotateByQuat([n.x, n.y, n.z], quat);
+    const len = Math.hypot(w[0], w[1], w[2]) || 1;
+    const c = Math.min(1, Math.max(-1, (w[1] / len) * axisY));
+    return +((Math.acos(c) * 180) / Math.PI).toFixed(2);
+  }
+
+  /**
+   * How far the face the die is RESTING ON sits off the floor, in degrees, and
+   * which face that is.
+   *
+   * This -- not the tilt of the presented face -- is what "cocked" means, and
+   * the difference is not pedantry. On a d6 or a d20 the two are identical,
+   * because their faces come in parallel pairs. On a d10 or d100 they are
+   * nothing alike: a pentagonal trapezohedron's kite faces are NOT parallel to
+   * the ones opposite them, so a d10 sitting perfectly flat still presents its
+   * numeral on a face tilted 20-31 degrees. Measured, over 8 rolls: top face
+   * 15.6-31.5 degrees while the resting face was 1.0-9.2. Gating the presented
+   * face would have declared every honest d10 rest cocked and tried to "right"
+   * a die that was already flat.
+   *
+   * Resting-face tilt is shape-independent: a die physically flat on a face
+   * has that face's plane on the floor, whatever the solid.
+   */
+  function bottomFaceTilt(mesh, quat) {
+    const ns = mesh.userData.normals;
+    let best = 0;
+    let bestDot = Infinity;
+    for (let i = 0; i < ns.length; i++) {
+      const w = rotateByQuat([ns[i].x, ns[i].y, ns[i].z], quat);
+      if (w[1] < bestDot) {
+        bestDot = w[1];
+        best = i;
+      }
+    }
+    return { index: best, deg: faceTiltDeg(mesh, best, quat, -1) };
+  }
+
+  /**
+   * Nudge a cocked die toward flat. The die is at a would-be rest, leaning on
+   * the face `bottomFaceTilt` found; rotate that face's normal toward straight
+   * down by spinning about the axis perpendicular to both, and lift very
+   * slightly so the die can pivot on an edge instead of grinding against the
+   * floor. A die stopped against the ring also gets a push inward, because a
+   * lean held up by a wall cannot fall flat while the wall is still there.
+   *
+   * Small on purpose: this runs inside the silent simulation, so every nudge
+   * is simulation time spent, and the click-to-number ceiling is real.
+   */
+  function applyRighting(quat) {
+    const R = THROW.righting;
+    const { index } = bottomFaceTilt(die, quat);
+    const n = die.userData.normals[index];
+    const w = rotateByQuat([n.x, n.y, n.z], quat);
+    // The axis that turns the resting face's normal toward straight down is
+    // cross(w, down) for down = [0, -1, 0], which reduces to [w.z, 0, -w.x].
+    const axis = [w[2], 0, -w[0]];
+    const len = Math.hypot(axis[0], axis[2]);
+    dieBody.wakeUp();
+    if (len > 1e-6) {
+      const tiltRad = Math.acos(Math.min(1, Math.max(-1, -w[1])));
+      const omega = Math.min(R.spinMax, Math.max(0.8, tiltRad * R.spin));
+      dieBody.angularVelocity.set(
+        (axis[0] / len) * omega,
+        0,
+        (axis[2] / len) * omega,
+      );
+    }
+    dieBody.velocity.y = Math.max(dieBody.velocity.y, R.lift);
+    // Off the wall, if that is what is holding the lean up.
+    const r = Math.hypot(dieBody.position.x, dieBody.position.z);
+    if (r > THROW.arena.radius - 1.5 && r > 1e-6) {
+      dieBody.velocity.x -= (dieBody.position.x / r) * R.wallPush;
+      dieBody.velocity.z -= (dieBody.position.z / r) * R.wallPush;
+    }
+  }
+
+  function topFaceTiltDeg(mesh, index, quat) {
+    const n = mesh.userData.normals[index];
+    const w = rotateByQuat([n.x, n.y, n.z], quat);
+    const len = Math.hypot(w[0], w[1], w[2]) || 1;
+    return +((Math.acos(Math.min(1, Math.max(-1, w[1] / len))) * 180) / Math.PI).toFixed(2);
+  }
+
   function captureLanded(st) {
     const mesh = st.mesh;
     st.index = landedIndex(mesh);
     st.value = landedValue(meshNormals(mesh), meshQuat(mesh), mesh.userData.values, [0, 1, 0]);
     st.label = formatFace(kind, st.value);
     st.landedQuat = meshQuat(mesh);
-    st.reveal = computeReveal(mesh, st.index, st.landedQuat);
     lastRoll = {
       index: st.index,
       value: st.value,
       landedQuat: st.landedQuat.slice(),
-      reveal: st.reveal,
+      reveal: null,
+      landedPos: null,
+      flightMs: st.metrics?.flightMs ?? null,
+      bounces: st.metrics?.bounces ?? null,
+      wallHits: st.metrics?.wallHits ?? null,
+      apex: st.metrics?.apex ?? null,
+      apexHeights: st.metrics?.apexHeights ?? null,
+      apex2: st.metrics?.apex2 ?? null,
+      apex2Heights: st.metrics?.apex2Heights ?? null,
+      dieHeight: st.metrics?.dieHeight ?? null,
+      kicks: st.metrics?.kicks ?? null,
+      rightingNudges: st.metrics?.rightingNudges ?? null,
+      restBodyY: st.metrics?.restBodyY ?? null,
+      tailSpin: st.metrics?.tailSpin ?? null,
+      __hits: st.metrics?.__hits ?? null,
+      heldFrames: 0,
     };
-    if (!st.fromP) st.fromP = new THREE.Vector3();
-    if (!st.flatP) st.flatP = new THREE.Vector3();
-    if (!st.toP) st.toP = new THREE.Vector3();
-    st.fromP.copy(mesh.position);
-    st.flatP.set(0, settleY, 0);
-    st.toP.set(0, settleY, 0);
+    // How far the presented face is from level, in degrees. A die that sleeps
+    // leaning -- most often one stopped against the invisible wall -- presents
+    // its numeral tilted no matter what the camera does, because the reveal
+    // squares the glyph by projecting its in-face up onto the GROUND plane and
+    // that projection is only faithful while the face is level.
+    // `cockedDeg` is the RESTING face's tilt -- see bottomFaceTilt. The
+    // presented face's own tilt is reported alongside it as context, because
+    // on a d10 it is large and blameless.
+    lastRoll.cockedDeg = bottomFaceTilt(mesh, st.landedQuat).deg;
+    lastRoll.topFaceDeg = topFaceTiltDeg(mesh, st.index, st.landedQuat);
+    // Where the die came to rest, with the height for THIS pose (the old code
+    // reused the idle pose's settleY for every landing).
+    const restY = Math.max(0.08, restOffsetY(localVerts, st.landedQuat, DIE_SCALE));
+    st.landedPos = [mesh.position.x, restY, mesh.position.z];
+    st.reveal = computeReveal(mesh, st.index, st.landedQuat, st.landedPos);
+    lastRoll.landedPos = st.landedPos.slice();
+    lastRoll.reveal = st.reveal;
   }
 
   function freezeBody(quat, pos) {
@@ -1497,7 +1701,7 @@ export function createDiceStage(canvas, video) {
   function placeCamera(reveal) {
     camera.position.fromArray(reveal.position);
     camera.up.fromArray(reveal.up);
-    // One reading of the reveal orientation, shared with the tail slerp.
+    // One reading of the reveal orientation, shared with the crane slerp.
     revealQuaternion(reveal, camera.quaternion);
   }
 
@@ -1507,25 +1711,41 @@ export function createDiceStage(canvas, video) {
     camera.lookAt(tx, SETTLE_AIM.y, tz);
   }
 
-  function lockSettleFrame(mesh, reveal) {
-    mesh.position.set(0, settleY, 0);
+  /** Pin position and camera only -- the die keeps the pose physics left it in. */
+  function lockSettleFrame(mesh, rec) {
+    mesh.position.set(rec.landedPos[0], rec.landedPos[1], rec.landedPos[2]);
     freezeBody(mesh.quaternion, mesh.position);
-    placeCamera(reveal);
+    placeCamera(rec.reveal);
     setFov(PRESENT_FOV);
     updateBlob(mesh);
   }
 
   function finishLanding(st, now) {
     captureLanded(st);
-    beginHold(st, now);
+    beginBeat(st, now);
+  }
+
+  /**
+   * The die is down. Freeze it where it landed and let it sit there for
+   * REST_BEAT_MS before anything else moves -- no camera, no number. The
+   * freeze happens HERE rather than in `beginCrane` so the die is genuinely
+   * still for the whole beat: the last replay frame can still carry a
+   * sub-threshold drift, and a beat spent creeping is not a beat spent at
+   * rest.
+   */
+  function beginBeat(st, now) {
+    st.phase = "beat";
+    st.beatT0 = now;
+    st.mesh.position.set(st.landedPos[0], st.landedPos[1], st.landedPos[2]);
+    freezeBody(st.mesh.quaternion, st.mesh.position);
+    if (lastRoll) lastRoll.heldFrames = st.heldFrames;
   }
 
   function finishRoll(st) {
     if (!st) return;
     const mesh = st.mesh;
     heatFace(mesh, st.index);
-    // Position and camera only -- the die keeps the pose physics left it in.
-    lockSettleFrame(mesh, st.reveal);
+    lockSettleFrame(mesh, st);
     st.finish(st.value);
   }
 
@@ -1555,13 +1775,24 @@ export function createDiceStage(canvas, video) {
     world.step(sim);
   }
 
+  /** The die is at rest. Freeze it where it is and crane the camera to it. */
+  function beginCrane(st, now) {
+    st.phase = "crane";
+    st.craneT0 = now;
+    st.craneFrom = { pos: camera.position.clone(), quat: camera.quaternion.clone(), fov: camera.fov };
+    st.mesh.position.set(st.landedPos[0], st.landedPos[1], st.landedPos[2]);
+    freezeBody(st.mesh.quaternion, st.mesh.position);
+    if (lastRoll) lastRoll.heldFrames = st.heldFrames;
+    // Report now so the quote lands as the camera arrives.
+    st.report?.(st.value);
+  }
+
   function beginHold(st, now) {
-    lockSettleFrame(st.mesh, st.reveal);
+    lockSettleFrame(st.mesh, st);
     st.phase = "hold";
     st.snapT0 = now;
     st.heated = true;
     heatFace(st.mesh, st.index);
-    st.report?.(st.value);
   }
 
   function snapshotBody() {
@@ -1575,6 +1806,30 @@ export function createDiceStage(canvas, video) {
       v: { x: v.x, y: v.y, z: v.z },
       w: { x: w.x, y: w.y, z: w.z },
     };
+  }
+
+  /**
+   * A die is at rest only if it is slow AND on the floor.
+   *
+   * The speed test alone is not enough, and the way it fails is spectacular.
+   * At the apex of an authored hop the vertical velocity passes through zero
+   * by definition, and `firstBounceHold.carry` has already capped the
+   * horizontal at 0.4 -- so the only thing keeping a die "awake" up there is
+   * its spin. A throw that happened to draw a small `launch.spin` (the draw
+   * is uniform per axis, so all three can land near zero) fell under both
+   * thresholds AT THE TOP OF THE ARC: the simulation stopped in mid-air, the
+   * second authored hop never fired, and the die was presented FLOATING four
+   * die-heights up. Measured at 2/40 rolls on d10 and 4/40 on d20 once
+   * `THROW.rest` was raised to end the tail (0.006 rad/s could never be
+   * reached mid-flight; 1.0 can).
+   *
+   * `dieHeight` is the circumsphere DIAMETER, so a resting die's centre is at
+   * most half of it above the floor. Requiring the centre inside a full
+   * die-height is generous to solver penetration and lift, and impossible for
+   * a die at the top of a four-die-height leap.
+   */
+  function atRest(lin, ang, y) {
+    return isSleepy(lin, ang) && y <= dieHeight;
   }
 
   function readFrame() {
@@ -1591,11 +1846,16 @@ export function createDiceStage(canvas, video) {
     dieBody.angularVelocity.set(snap.w.x, snap.w.y, snap.w.z);
   }
 
+  /** Seat mesh and body at one pose. The single place a replay pose is applied. */
+  function seatPose(mesh, p, q) {
+    mesh.position.set(p[0], p[1], p[2]);
+    mesh.quaternion.set(q[0], q[1], q[2], q[3]);
+    dieBody.position.set(p[0], p[1], p[2]);
+    dieBody.quaternion.set(q[0], q[1], q[2], q[3]);
+  }
+
   function applyFrame(mesh, f) {
-    mesh.position.set(f.p.x, f.p.y, f.p.z);
-    mesh.quaternion.set(f.q.x, f.q.y, f.q.z, f.q.w);
-    dieBody.position.set(f.p.x, f.p.y, f.p.z);
-    dieBody.quaternion.set(f.q.x, f.q.y, f.q.z, f.q.w);
+    seatPose(mesh, [f.p.x, f.p.y, f.p.z], [f.q.x, f.q.y, f.q.z, f.q.w]);
   }
 
   function applyThrow(mesh) {
@@ -1621,21 +1881,245 @@ export function createDiceStage(canvas, video) {
       ms += PHYS_STEP * 1000;
       const lin = dieBody.velocity;
       const ang = dieBody.angularVelocity;
-      if (isSleepy([lin.x, lin.y, lin.z], [ang.x, ang.y, ang.z])) break;
+      if (atRest([lin.x, lin.y, lin.z], [ang.x, ang.y, ang.z], dieBody.position.y)) break;
     }
     mesh.position.copy(dieBody.position);
     mesh.quaternion.copy(dieBody.quaternion);
   }
 
+  /**
+   * Run the throw to rest without rendering, recording every physics step.
+   * Also counts floor bounces and wall hits via the die's collide events,
+   * AUTHORS the first bounce, and measures how high that bounce went; the
+   * listener is attached only for the duration of the sim.
+   *
+   * The authored bounce is the one place physics is overruled, and it is
+   * overruled here rather than during playback on purpose: this is the
+   * simulation whose frames become the replay, so the die that lands is the
+   * die the viewer watched land. Determinism and invariant 2 are untouched --
+   * the face is still read off the body after it sleeps, from a trajectory
+   * that ran to rest before a single frame was drawn.
+   */
   function simulateTrajectory() {
+    // Set here rather than at build time: `kind` changes without the world
+    // being rebuilt, and this is the only physics whose result is kept.
+    dieContact.restitution = restitutionFor(kind);
     const frames = [readFrame()];
+    // The authored hops: one rebound target per counted floor impact, in
+    // die-heights, taken in order from THROW.bounceHeights. The die gets that
+    // many normalized rebounds and is on its own after them. What each hop is
+    // AIMED at is here; what it reached is `apex` / `apex2`, and the two
+    // differ by whatever the die was still doing on the way up.
+    const hopSpeeds = THROW.bounceHeights.map((h) =>
+      reboundSpeed(h * dieHeight, THROW.gravityY),
+    );
+    const metrics = {
+      flightMs: 0,
+      bounces: 0,
+      wallHits: 0,
+      apex: 0,
+      apexHeights: 0,
+      apex2: 0,
+      apex2Heights: 0,
+      dieHeight: +dieHeight.toFixed(3),
+    };
     let ms = 0;
-    while (ms < FLIGHT_MAX_MS) {
-      world.step(PHYS_STEP);
-      ms += PHYS_STEP * 1000;
-      frames.push(readFrame());
-      if (isSleepy(frames[frames.length - 1].lin, frames[frames.length - 1].ang)) break;
+    // One bounce is one IMPACT, not one contact point. A die landing flat puts
+    // several contact equations on the floor in a single step and cannon-es
+    // fires `collide` for every one of them -- a flat d100 landing counts three
+    // and a tumbling d10 reached 27, which is what made "1-4 bounces"
+    // unreachable while the die was visibly bouncing twice. Count the first
+    // event of an impact and ignore the rest: never twice in one step (all
+    // events of a step share `ms`), and never inside the refractory window.
+    let lastFloorMs = -Infinity;
+    let lastWallMs = -Infinity;
+    // How far the die RISES off its first counted bounce, in world units
+    // against a die ~1.6 across. The bounce count says a bounce happened; it
+    // cannot tell a 0.05-unit shudder from half a die of air, and the first
+    // profile that passed every other bound still read as drop-tumble-settle
+    // because its rebounds were 13% of a die. `bounceY` is the body centre at
+    // that impact (collide fires before the step integrates, so it is the
+    // height at contact) and `peakY` is the highest the centre gets after it.
+    let bounceY = null;
+    let peakY = 0;
+    // The kick is armed by the collide listener and fired after the step that
+    // owns it. cannon-es dispatches `collide` BEFORE the solver runs, so the
+    // velocity is still the pre-impact one there; by the time world.step()
+    // returns, restitution has been applied and the vertical component is the
+    // one to overwrite. `kicks` counts them; it must end at hopSpeeds.length.
+    let kickArmed = false;
+    let kicks = 0;
+    let kickMs = 0;
+    let kickSpeed = 0;
+    const HOLD = THROW.firstBounceHold;
+    // Open from a kick until the die starts falling again, so each hop's rise
+    // is measured against its own launch and not against whatever came later.
+    let apexOpen = false;
+    // The rise of each authored hop, in world units, in order.
+    const rises = [];
+    // Righting nudges spent on this throw, by budget. See THROW.righting.
+    let rightedEarly = 0;
+    let rightedRest = 0;
+    const counted = (last) => ms !== last && ms - last >= BOUNCE_REFRACTORY_MS;
+    const onCollide = (e) => {
+      const speed = Math.abs(e.contact.getImpactVelocityAlongNormal());
+      if (speed <= IMPACT_SPEED_FLOOR) return;
+      if (e.body === floorBody) {
+        if (!counted(lastFloorMs)) return;
+        lastFloorMs = ms;
+        metrics.bounces += 1;
+        (metrics.__hits ||= []).push([
+          Math.round(ms),
+          +speed.toFixed(1),
+          +Math.hypot(dieBody.position.x, dieBody.position.z).toFixed(2),
+          +Math.hypot(dieBody.velocity.x, dieBody.velocity.z).toFixed(1),
+        ]);
+        // Author a rebound while hops remain. Each hop measures its own rise,
+        // so close the one still open if the die struck again before it had
+        // begun to fall.
+        if (kicks < hopSpeeds.length) {
+          if (apexOpen) {
+            rises.push(Math.max(0, peakY - bounceY));
+            apexOpen = false;
+          }
+          bounceY = dieBody.position.y;
+          peakY = bounceY;
+          kickArmed = true;
+        }
+      } else if (wallBodies.includes(e.body)) {
+        if (!counted(lastWallMs)) return;
+        lastWallMs = ms;
+        metrics.wallHits += 1;
+      }
+    };
+    dieBody.addEventListener("collide", onCollide);
+    try {
+      while (ms < FLIGHT_MAX_MS) {
+        world.step(PHYS_STEP);
+        ms += PHYS_STEP * 1000;
+        if (kickArmed) {
+          kickArmed = false;
+          kickSpeed = hopSpeeds[kicks];
+          kicks += 1;
+          apexOpen = true;
+          kickMs = ms;
+        }
+        // The authored bounce, held for THROW.firstBounceHold.ms. Vertical is
+        // set to the ballistic value the target height needs and then defended
+        // against the grazing contacts a spinning die makes on its way up;
+        // horizontal and angular keep the DIRECTION the contact produced and
+        // lose only the magnitude the slam's friction impulse added. See the
+        // note in physics-roll.js for why each of the three exists.
+        if (kicks > 0 && ms - kickMs <= HOLD.ms) {
+          const t = (ms - kickMs) / 1000;
+          // The trajectory the die would be on had nothing touched it --
+          // damping included, so the hold gives back what a graze stole and
+          // never more than that.
+          const want = riseVelocityAt(kickSpeed, t);
+          const v = dieBody.velocity;
+          if (v.y < want) v.y = want;
+          const carry = Math.hypot(v.x, v.z);
+          if (carry > HOLD.carry) {
+            v.x = (v.x / carry) * HOLD.carry;
+            v.z = (v.z / carry) * HOLD.carry;
+          }
+          const w = dieBody.angularVelocity;
+          const spin = Math.hypot(w.x, w.y, w.z);
+          if (spin > HOLD.spin) {
+            const k = HOLD.spin / spin;
+            w.x *= k;
+            w.y *= k;
+            w.z *= k;
+          }
+        }
+        frames.push(readFrame());
+        if (apexOpen) {
+          if (dieBody.position.y > peakY) peakY = dieBody.position.y;
+          if (dieBody.velocity.y <= 0) {
+            rises.push(Math.max(0, peakY - bounceY));
+            apexOpen = false;
+          }
+        }
+        const f = frames[frames.length - 1];
+        const onFloor = dieBody.position.y <= dieHeight;
+        // Righting is cheapest BEFORE the die has fully stopped. A nudge given
+        // while it is still settling blends into the motion already there; one
+        // given after a dead stop costs an entire fresh settle, and that is
+        // simulation time charged straight to the click budget. So the check
+        // runs on a "nearly stopped" predicate a few times looser than rest.
+        const settling =
+          onFloor &&
+          Math.hypot(f.lin[0], f.lin[1], f.lin[2]) < THROW.rest.lin * SETTLE_SLACK &&
+          Math.hypot(f.ang[0], f.ang[1], f.ang[2]) < THROW.rest.ang * SETTLE_SLACK;
+        const bodyQuat = () => [
+          dieBody.quaternion.x,
+          dieBody.quaternion.y,
+          dieBody.quaternion.z,
+          dieBody.quaternion.w,
+        ];
+        const leaning = (q) =>
+          bottomFaceTilt(die, q).deg > THROW.righting.toleranceDeg;
+        if (rightedEarly < THROW.righting.early && settling) {
+          const q = bodyQuat();
+          if (leaning(q)) {
+            applyRighting(q);
+            rightedEarly += 1;
+            continue;
+          }
+        }
+        if (atRest(f.lin, f.ang, dieBody.position.y)) {
+          // The reserved budget: a lean at a genuine stop always gets tries of
+          // its own, however many were spent on the way down.
+          if (rightedRest < THROW.righting.rest) {
+            const q = bodyQuat();
+            if (leaning(q)) {
+              applyRighting(q);
+              rightedRest += 1;
+              continue;
+            }
+          }
+          break;
+        }
+      }
+    } finally {
+      dieBody.removeEventListener("collide", onCollide);
     }
+    // No counted bounce means no rebound to measure, which is a rise of zero
+    // and not a missing reading: a throw that never struck the floor hard
+    // enough to count has failed the bounce bound already.
+    if (apexOpen) rises.push(Math.max(0, peakY - bounceY));
+    metrics.apex = +(rises[0] ?? 0).toFixed(3);
+    metrics.apexHeights = +((rises[0] ?? 0) / dieHeight).toFixed(3);
+    metrics.apex2 = +(rises[1] ?? 0).toFixed(3);
+    metrics.apex2Heights = +((rises[1] ?? 0) / dieHeight).toFixed(3);
+    metrics.kicks = kicks;
+    metrics.rightingNudges = rightedEarly + rightedRest;
+    // Where the BODY actually was when the simulation stopped.
+    //
+    // Not `landedPos[1]`, which is the geometric seat height derived from the
+    // landed quaternion (`restOffsetY`) and so is ~0.88 at most no matter what
+    // the die was doing -- a die frozen at the apex of a hop still reports a
+    // seat height, because `beginBeat` snaps the mesh down to it. That made
+    // the rest-height gates in the soak and the e2e unfalsifiable: they could
+    // not have caught the very mid-air stop they were written for. This is the
+    // raw simulation state at loop exit and is what those gates read now.
+    metrics.restBodyY = +dieBody.position.y.toFixed(3);
+    // How fast the die is still turning as it comes to rest. This is NOT a
+    // bound -- Cam's ruling is maximum visible spin ("i want that shit
+    // SPINNING"), so a die that keeps turning into the tail is the goal and
+    // this number is the evidence for it, reported and never failed on.
+    const spinOver = (windowMs) => {
+      const n = Math.min(frames.length, Math.round(windowMs / (PHYS_STEP * 1000)));
+      let m = 0;
+      for (let i = frames.length - n; i < frames.length; i++) {
+        const a = frames[i].ang;
+        m = Math.max(m, Math.hypot(a[0], a[1], a[2]));
+      }
+      return +m.toFixed(2);
+    };
+    metrics.tailSpin = spinOver(100);
+    metrics.flightMs = Math.round(ms);
+    frames.metrics = metrics;
     return frames;
   }
 
@@ -1653,7 +2137,7 @@ export function createDiceStage(canvas, video) {
         mesh.position.copy(dieBody.position);
         mesh.quaternion.copy(dieBody.quaternion);
         trackFlight(mesh);
-        if (isSleepy([dieBody.velocity.x, dieBody.velocity.y, dieBody.velocity.z], [dieBody.angularVelocity.x, dieBody.angularVelocity.y, dieBody.angularVelocity.z]) || now - st.t0 >= FLIGHT_MAX_MS) {
+        if (atRest([dieBody.velocity.x, dieBody.velocity.y, dieBody.velocity.z], [dieBody.angularVelocity.x, dieBody.angularVelocity.y, dieBody.angularVelocity.z], dieBody.position.y) || now - st.t0 >= FLIGHT_MAX_MS) {
           finishLanding(st, now);
         }
         updateBlob(mesh);
@@ -1661,46 +2145,66 @@ export function createDiceStage(canvas, video) {
       }
       const frames = st.replay;
       const last = frames.length - 1;
-      const frame = frames[Math.min(st.replayI, last)];
-      const scale = slowMoScale(Math.hypot(...frame.lin), Math.hypot(...frame.ang), now - st.t0);
-      st.replayT += dt * scale;
-      st.replayI = Math.min(last, Math.floor(st.replayT / PHYS_STEP));
-      const i = st.replayI;
-      applyFrame(mesh, frames[i]);
-      const span = Math.max(1, last - st.tailStart);
-      const u = i <= st.tailStart ? 0 : smoothProgress(i - st.tailStart, span);
-      if (u <= 0) {
-        // Still in flight: follow the die from overhead, exactly as the
-        // live-physics branch does.
-        trackFlight(mesh);
-      } else {
-        // Tail: the die slides to centre in its own pose; the camera eases
-        // from the follow shot into the reveal shot. Nothing here writes
-        // mesh.quaternion — applyFrame above already set it from the replay.
-        if (!st.tailCamPos) {
-          // The *from* end is cached once: it is where the follow shot was
-          // when the tail began, and it must not drift.
-          st.tailCamPos = camera.position.clone();
-          st.tailCamQuat = camera.quaternion.clone();
-          st.tailFov = camera.fov;
-        }
-        // The *to* end is re-derived every frame, so a resize mid-tail (which
-        // recomputes st.reveal) is picked up instead of being tweened past.
-        const toCamPos = scratchRevealPos.fromArray(st.reveal.position);
-        const toCamQuat = revealQuaternion(st.reveal, scratchRevealQuat);
-        st.fromP.set(frames[i].p.x, frames[i].p.y, frames[i].p.z);
-        mesh.position.lerpVectors(st.fromP, st.toP, u);
-        camera.position.lerpVectors(st.tailCamPos, toCamPos, u);
-        camera.quaternion.slerpQuaternions(st.tailCamQuat, toCamQuat, u);
-        setFov(st.tailFov + (PRESENT_FOV - st.tailFov) * u);
-        setFaceFocus(mesh, st.index, u);
+      // Real time, always — and real time means the WALL clock, not `tick`'s
+      // dt. The old energy-ramped slow-mo displayed recorded frames at 22%
+      // speed with a floor-index lookup — ~13 fps and every near-rest jitter
+      // held five times longer. Interpolate instead.
+      //
+      // `tick` clamps dt at 50 ms so the dead live-physics path cannot take a
+      // huge step. Advancing the replay by that clamped value re-introduced
+      // the same defect through the back door: on any renderer below 20 fps
+      // the replay clock falls behind the wall clock and the throw plays in
+      // slow motion. Measured at 0.30-0.73x under SwiftShader. Read the wall
+      // clock directly instead, capped at 250 ms so a backgrounded tab cannot
+      // fast-forward the whole throw on its first frame back; interpolation
+      // makes the larger steps smooth.
+      const wallMs = st.lastTickNow == null ? 0 : Math.min(250, now - st.lastTickNow);
+      st.lastTickNow = now;
+      st.replayT += wallMs / 1000;
+      const exact = st.replayT / PHYS_STEP;
+      const i = Math.min(last, Math.floor(exact));
+      st.replayI = i;
+      const next = frames[Math.min(last, i + 1)];
+      const pose = interpolateFrame(frames[i], next, exact - i);
+      seatPose(mesh, pose.p, pose.q);
+      // "Vibration" detector: a render tick where the clock advanced but the
+      // displayed pose did not change while frames remain.
+      if (i < last && st.lastPose) {
+        const same =
+          st.lastPose.p.every((v, k) => v === pose.p[k]) &&
+          st.lastPose.q.every((v, k) => v === pose.q[k]);
+        if (same) st.heldFrames += 1;
       }
+      st.lastPose = pose;
       updateBlob(mesh);
-      if (i >= last) beginHold(st, now);
+      if (i >= last) beginBeat(st, now);
+      return;
+    }
+    if (st.phase === "beat") {
+      // Nothing moves. The die is frozen at its landing and the camera is
+      // still wherever the flight left it; the only thing happening is the
+      // clock.
+      updateBlob(mesh);
+      if (now - st.beatT0 >= REST_BEAT_MS) beginCrane(st, now);
+      return;
+    }
+    if (st.phase === "crane") {
+      // The die is frozen at its landing; only the camera moves. The *to* end
+      // is re-derived every frame, so a resize mid-crane (which recomputes
+      // st.reveal) is picked up instead of being tweened past.
+      const u = smoothProgress(now - st.craneT0, CRANE_MS);
+      const toPos = scratchRevealPos.fromArray(st.reveal.position);
+      const toQuat = revealQuaternion(st.reveal, scratchRevealQuat);
+      camera.position.lerpVectors(st.craneFrom.pos, toPos, u);
+      camera.quaternion.slerpQuaternions(st.craneFrom.quat, toQuat, u);
+      setFov(st.craneFrom.fov + (PRESENT_FOV - st.craneFrom.fov) * u);
+      setFaceFocus(mesh, st.index, u);
+      updateBlob(mesh);
+      if (u >= 1) beginHold(st, now);
       return;
     }
     if (st.phase === "hold") {
-      lockSettleFrame(mesh, st.reveal);
+      lockSettleFrame(mesh, st);
       if (now - st.snapT0 >= HOLD_MS) finishRoll(st);
       return;
     }
@@ -1723,19 +2227,21 @@ export function createDiceStage(canvas, video) {
       value: null,
       label: "",
       landedQuat: null,
+      landedPos: null,
       reveal: null,
       t0: performance.now(),
       snapT0: 0,
-      fromP: new THREE.Vector3(),
-      flatP: new THREE.Vector3(),
-      toP: new THREE.Vector3(),
-      tailCamPos: null,
-      tailCamQuat: null,
-      tailFov: 0,
+      craneT0: 0,
+      beatT0: 0,
+      craneFrom: null,
       replay: null,
       replayI: 0,
       replayT: 0,
-      tailStart: 0,
+      // Wall clock of the previous replay tick; null until the first one.
+      lastTickNow: null,
+      metrics: null,
+      heldFrames: 0,
+      lastPose: null,
       heated: false,
       live: () => session.isLive() && die === mesh,
       report,
@@ -1776,8 +2282,7 @@ export function createDiceStage(canvas, video) {
         captureLanded(st);
         heatFace(mesh, st.index);
         camTween += 1;
-        // Position and camera only -- the die keeps the pose physics left it in.
-        lockSettleFrame(mesh, st.reveal);
+        lockSettleFrame(mesh, st);
         finish(st.value);
         return;
       }
@@ -1789,13 +2294,12 @@ export function createDiceStage(canvas, video) {
       applyForcedFace(mesh, force);
       camTween += 1;
       const st = emptyRollState(mesh, session, finish, force, report);
+      st.metrics = replay.metrics;
       captureLanded(st);
       restoreBody(origin);
       mesh.position.copy(dieBody.position);
       mesh.quaternion.copy(dieBody.quaternion);
-      const tailN = Math.min(replay.length - 1, Math.max(36, Math.round(TAIL_MS / 1000 / PHYS_STEP)));
       st.replay = replay;
-      st.tailStart = Math.max(0, replay.length - 1 - tailN);
       lookDown(dropCam);
       setFov(DROP_FOV);
       rollState = st;
@@ -1862,10 +2366,97 @@ export function createDiceStage(canvas, video) {
         landedIndex: lastRoll?.index ?? -1,
         landedQuat: lastRoll?.landedQuat ?? null,
         meshQuat: die ? meshQuat(die) : null,
+        meshPos: die ? [die.position.x, die.position.y, die.position.z] : null,
         normals: die ? meshNormals(die) : null,
+        landedPos: lastRoll?.landedPos ?? null,
+        // The containment, so tests read the bound the walls were actually
+        // built from instead of restating it as a literal. `radius` is the
+        // inscribed radius of the plane ring: a landing must keep
+        // hypot(x, z) inside radius minus the die and its margin.
+        arena: { radius: THROW.arena.radius, planes: THROW.arena.planes },
         reveal: lastRoll?.reveal ?? null,
+        flightMs: lastRoll?.flightMs ?? null,
+        bounces: lastRoll?.bounces ?? null,
+        wallHits: lastRoll?.wallHits ?? null,
+        // How far the die rose off its first counted bounce, in world units
+        // and in die-heights. That bounce is authored, so `apexHeights` is
+        // compliance numbers: they sit on the entries of THROW.bounceHeights.
+        apex: lastRoll?.apex ?? null,
+        apexHeights: lastRoll?.apexHeights ?? null,
+        apex2: lastRoll?.apex2 ?? null,
+        apex2Heights: lastRoll?.apex2Heights ?? null,
+        dieHeight: lastRoll?.dieHeight ?? null,
+        // How many authored rebounds fired, and how many were asked for. The
+        // two must match on every roll; the soak reads both rather than
+        // restating the profile's length as a literal.
+        kicks: lastRoll?.kicks ?? null,
+        bounceHeights: THROW.bounceHeights.length,
+        // Tilt of the face the die is RESTING ON, off the floor, in degrees.
+        // 0 is flat. This is the cocked measure and the one that is gated:
+        // it is shape-independent, where the presented face is not. See
+        // `bottomFaceTilt`.
+        cockedDeg: lastRoll?.cockedDeg ?? null,
+        // How many righting nudges this throw needed. 0 on a clean flat rest.
+        rightingNudges: lastRoll?.rightingNudges ?? null,
+        // The body's y where the silent sim stopped -- raw simulation state,
+        // not the geometric seat height. This is the one that can catch a die
+        // that stopped in mid-air; `landedPos[1]` cannot.
+        restBodyY: lastRoll?.restBodyY ?? null,
+        // Tilt of the PRESENTED face off level, degrees. Context, never
+        // gated: on a d10 or d100 a perfectly flat rest still reads 20-31
+        // here, because a trapezohedron's faces are not parallel to the ones
+        // opposite them. That is the shape, not a fault.
+        topFaceDeg: lastRoll?.topFaceDeg ?? null,
+        // The glyph's in-plane angle ON SCREEN at the current camera, degrees,
+        // signed, 0 = upright. This is what "off axis" actually looks like to
+        // a player, and it is measured rather than inferred: project the rest
+        // point and the same point pushed along the numeral's up direction,
+        // and take the angle of the resulting 2D vector from screen-up.
+        glyphDeg: (() => {
+          if (!die || !lastRoll?.landedQuat || lastRoll.index == null) return null;
+          const t = die.userData.faceUps[lastRoll.index];
+          if (!t) return null;
+          const up = rotateByQuat([t.x, t.y, t.z], lastRoll.landedQuat);
+          const base = die.position.clone();
+          const tip = base.clone().add(new THREE.Vector3(up[0], up[1], up[2]).multiplyScalar(0.6));
+          const a = base.project(camera);
+          const b = tip.project(camera);
+          const w = canvas.clientWidth || 1;
+          const h = canvas.clientHeight || 1;
+          // Screen pixels: x right, y DOWN. Screen-up is -y.
+          const dx = ((b.x - a.x) / 2) * w;
+          const dy = ((a.y - b.y) / 2) * h;
+          return +((Math.atan2(dx, dy) * 180) / Math.PI).toFixed(2);
+        })(),
+        // Angular speed near rest. Evidence of spin, not a gate.
+        tailSpin: lastRoll?.tailSpin ?? null,
+        __hits: lastRoll?.__hits ?? null,
+        heldFrames: lastRoll?.heldFrames ?? null,
+        restBeatMs: REST_BEAT_MS,
+        craneMs: CRANE_MS,
+        holdMs: HOLD_MS,
         fov: +camera.fov.toFixed(2),
         camY: +camera.position.y.toFixed(3),
+        // Where the die actually lands on screen, in CSS pixels, with the
+        // radius its silhouette projects to. The quote card must not reach
+        // `y + r`; that is the gate Cam's "no overlap" ruling turned into a
+        // number, and it is measured rather than assumed because it depends
+        // on the reveal distance, the rise, and the aspect all at once.
+        dieScreen: (() => {
+          if (!die) return null;
+          const w = canvas.clientWidth || 1;
+          const h = canvas.clientHeight || 1;
+          const c = die.position.clone().project(camera);
+          const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+          const e = die.position.clone().addScaledVector(right, dieHeight / 2).project(camera);
+          return {
+            x: +(((c.x + 1) / 2) * w).toFixed(1),
+            y: +(((1 - c.y) / 2) * h).toFixed(1),
+            r: +Math.hypot(((e.x - c.x) / 2) * w, ((e.y - c.y) / 2) * h).toFixed(1),
+            vw: w,
+            vh: h,
+          };
+        })(),
         cam: [+camera.position.x.toFixed(2), +camera.position.y.toFixed(2), +camera.position.z.toFixed(2)],
         up: [+camera.up.x.toFixed(2), +camera.up.y.toFixed(2), +camera.up.z.toFixed(2)],
       };

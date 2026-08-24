@@ -1,6 +1,6 @@
-import { createDiceStage, formatFace } from "./dice3d.js?v=reveal-cam1";
-import { pickHortQuote } from "./quotes.js?v=reveal-cam1";
-import { composeShareStill } from "./share-card.js?v=reveal-cam1";
+import { createDiceStage, formatFace } from "./dice3d.js?v=hand-throw1";
+import { pickHortQuote } from "./quotes.js?v=hand-throw1";
+import { composeShareStill } from "./share-card.js?v=hand-throw1";
 
 const envFilm = document.querySelector("#env-film");
 const form = document.querySelector("#war-table");
@@ -98,6 +98,23 @@ async function shareStill(file) {
   return "saved";
 }
 
+// Share is an icon now, so its feedback cannot be a label swap: writing
+// textContent would delete the inline SVG and resize the stud. The word goes
+// on a data attribute that styles.css floats above the button, which costs no
+// layout. The accessible name still changes and changes back, exactly as the
+// old text swap did.
+let shareFlashTimer = null;
+
+function flashShare(word) {
+  shareBtn.dataset.flash = word;
+  shareBtn.setAttribute("aria-label", word);
+  clearTimeout(shareFlashTimer);
+  shareFlashTimer = setTimeout(() => {
+    delete shareBtn.dataset.flash;
+    shareBtn.setAttribute("aria-label", "Share");
+  }, 1400);
+}
+
 function setIdle() {
   actionId += 1;
   lastResult = null;
@@ -125,13 +142,22 @@ form.addEventListener("submit", async (event) => {
     dice.setKind(kind, env);
     const envPlay = playEnv(env, { loop: false, muted: false });
     const diePlay = dice.roll();
-    const [, value] = await Promise.all([envPlay, diePlay]);
+    // The number is what the click was for, so it lands when the THROW is
+    // done -- dice.roll() resolves at crane start, so the quote arrives as the
+    // camera does. These used to be one `await Promise.all([envPlay, diePlay])`,
+    // which meant the result also waited on the environment film's `ended`:
+    // the films are 5-7s long, so a ~1s throw put the number on screen after
+    // six. The film now returns to its idle loop on its own clock.
+    envPlay.then(() => {
+      if (id !== actionId) return;
+      envFilm.loop = true;
+      envFilm.muted = true;
+      envFilm.play().catch(() => playEnv(env, { loop: true, muted: true }));
+      syncMuteButton();
+    });
+    const value = await diePlay;
     if (id !== actionId) return;
     if (value == null) return;
-    envFilm.loop = true;
-    envFilm.muted = true;
-    envFilm.play().catch(() => playEnv(env, { loop: true, muted: true }));
-    syncMuteButton();
     const hort = pickHortQuote(kind, value);
     hortRoll.textContent = `${kind}  ·  ${formatFace(kind, value)}`;
     hortLine.textContent = `“${hort.line}”`;
@@ -156,17 +182,11 @@ shareBtn.addEventListener("click", async () => {
     });
     const mode = await shareStill(file);
     if (mode === "copied" || mode === "saved") {
-      shareBtn.textContent = mode === "copied" ? "Copied" : "Saved";
-      setTimeout(() => {
-        shareBtn.textContent = "Share";
-      }, 1400);
+      flashShare(mode === "copied" ? "Copied" : "Saved");
     }
   } catch (err) {
     if (err?.name !== "AbortError") {
-      shareBtn.textContent = "Failed";
-      setTimeout(() => {
-        shareBtn.textContent = "Share";
-      }, 1400);
+      flashShare("Failed");
     }
   } finally {
     shareBtn.disabled = false;

@@ -1,22 +1,29 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  ANG_SLEEP,
   FACE_UV_YAW,
+  FLIGHT_MAX_MS,
   GRAVITY_Y,
-  PRESENT_MS,
+  LIN_SLEEP,
+  THROW,
   adjacentFaces,
+  arenaPlanes,
   assignPolyhedronValues,
   faceValueTable,
-  flightZoom,
   icosahedronFaceNormals,
+  interpolateFrame,
   isSleepy,
   landedValue,
   pairOppositeFaces,
+  quatSlerp,
+  dampedRise,
+  reboundSpeed,
+  riseVelocityAt,
   restOffsetY,
   revealCamera,
   rotateAround,
   rotateByQuat,
-  slowMoScale,
   snapProgress,
   smoothProgress,
   snapQuaternion,
@@ -99,44 +106,17 @@ describe("uniqueVertsAndFaces", () => {
 });
 
 describe("throwPose", () => {
-  it("drops from high with downward speed, inward travel, and spin", () => {
+  it("throws from hand height with downward speed, into the arena, and with spin", () => {
     let i = 0;
     const seq = [0.2, 0.8, 0.3, 0.4, 0.6, 0.1, 0.9, 0.25, 0.75, 0.5, 0.5, 0.5];
     const rng = () => seq[i++ % seq.length];
     const pose = throwPose(rng);
-    assert.ok(pose.position[1] > 4.2, `start y ${pose.position[1]}`);
+    assert.ok(pose.position[1] < 3, `start y ${pose.position[1]}`);
     assert.ok(pose.velocity[1] < 0, `vy should fall, got ${pose.velocity[1]}`);
     assert.ok(pose.velocity[2] < 0, `vz should be toward -Z, got ${pose.velocity[2]}`);
+    assert.ok(pose.velocity[1] < -40, `the slam drives the die down, got ${pose.velocity[1]}`);
     assert.equal(pose.angularVelocity.length, 3);
     assert.ok(pose.angularVelocity.some((v) => Math.abs(v) > 1));
-  });
-});
-
-describe("gravity and timing", () => {
-  it("uses strong gravity and a long presentation beat", () => {
-    assert.ok(GRAVITY_Y <= -42, `gravity ${GRAVITY_Y}`);
-    assert.ok(PRESENT_MS >= 1800, `present ${PRESENT_MS}`);
-  });
-});
-
-describe("slowMoScale", () => {
-  it("stays full-speed for the drop, then eases as energy dies", () => {
-    almost(slowMoScale(8, 12, 200), 1);
-    const lateFast = slowMoScale(6, 10, 2000);
-    const lateSlow = slowMoScale(0.2, 0.3, 2000);
-    assert.ok(lateFast > 0.7, `still-energetic late scale ${lateFast}`);
-    assert.ok(lateSlow < 0.4, `resting scale ${lateSlow}`);
-    assert.ok(lateSlow < lateFast);
-  });
-});
-
-describe("flightZoom", () => {
-  it("eases from 0 to 1 over the zoom window", () => {
-    almost(flightZoom(0, 2000), 0);
-    almost(flightZoom(2000, 2000), 1);
-    almost(flightZoom(4000, 2000), 1);
-    const mid = flightZoom(1000, 2000);
-    assert.ok(mid > 0.4 && mid < 0.7, `smoothstep mid ${mid}`);
   });
 });
 
@@ -312,10 +292,27 @@ describe("FACE_UV_YAW", () => {
 });
 
 describe("isSleepy", () => {
-  it("is true only when linear and angular speed are both tiny", () => {
-    assert.equal(isSleepy([0, 0, 0], [0, 0, 0]), true);
-    assert.equal(isSleepy([0.5, 0, 0], [0, 0, 0]), false);
-    assert.equal(isSleepy([0, 0, 0], [2, 0, 0]), false);
+  // Thresholds are passed explicitly. They used to be left to default to
+  // THROW.rest, which quietly made this a test of the PROFILE: every attempt
+  // to tune the settle thresholds broke it, so the tuning task could not move
+  // the one value that decides when a throw ends. What belongs here is the
+  // behaviour of the function -- both speeds under their own threshold.
+  it("is true only when both speeds are under their own threshold", () => {
+    const lin = 0.3;
+    const ang = 0.9;
+    assert.equal(isSleepy([0, 0, 0], [0, 0, 0], lin, ang), true);
+    assert.equal(isSleepy([0.2, 0, 0], [0, 0.5, 0], lin, ang), true);
+    assert.equal(isSleepy([0.4, 0, 0], [0, 0.5, 0], lin, ang), false);
+    assert.equal(isSleepy([0.2, 0, 0], [0, 1.0, 0], lin, ang), false);
+    // It is the magnitude that counts, not any one component.
+    assert.equal(isSleepy([0.2, 0.2, 0.2], [0, 0, 0], lin, ang), false);
+  });
+
+  it("defaults to the profile's own settle thresholds", () => {
+    const under = THROW.rest.lin * 0.5;
+    const over = THROW.rest.lin * 2;
+    assert.equal(isSleepy([under, 0, 0], [0, THROW.rest.ang * 0.5, 0]), true);
+    assert.equal(isSleepy([over, 0, 0], [0, THROW.rest.ang * 0.5, 0]), false);
   });
 });
 
@@ -425,5 +422,299 @@ describe("revealCamera", () => {
     const cam = revealCamera([1, 0, 0], { ...OPTS, aim });
     assert.notStrictEqual(cam.aim, aim);
     assert.deepEqual(cam.aim, aim);
+  });
+});
+
+describe("arenaPlanes", () => {
+  it("makes `count` planes, every one tangent to the circle of `radius`", () => {
+    const planes = arenaPlanes(3.9, 16);
+    assert.equal(planes.length, 16);
+    for (const { normal, position } of planes) {
+      almost(Math.hypot(position[0], position[1], position[2]), 3.9, 1e-9);
+      almost(Math.hypot(...normal), 1, 1e-9);
+      assert.equal(normal[1], 0, "the ring is vertical");
+      assert.equal(position[1], 0, "the ring stands on the floor");
+    }
+  });
+
+  it("every normal points at the origin, so the die is inside", () => {
+    for (const { normal, position } of arenaPlanes(3.2, 12)) {
+      // Inward means the vector from the plane to the origin agrees with it.
+      const toCentre = [-position[0], -position[1], -position[2]];
+      const d =
+        normal[0] * toCentre[0] + normal[1] * toCentre[1] + normal[2] * toCentre[2];
+      assert.ok(d > 0, `normal ${normal} faces away from the centre`);
+    }
+  });
+
+  it("holds every landing the bound allows, and none the ring should not", () => {
+    const R = 3.9;
+    const planes = arenaPlanes(R, 16);
+    // Clearance of a point from the ring: how far inside the nearest plane it
+    // sits, along that plane's inward normal. Positive is contained.
+    const clearance = (px, pz) =>
+      Math.min(
+        ...planes.map(
+          ({ normal, position }) =>
+            normal[0] * (px - position[0]) + normal[2] * (pz - position[2]),
+        ),
+      );
+    // How far a point on the inscribed circle can sit inside the nearest
+    // flat: R(1 - cos(pi / count)), the chord's sagitta.
+    const slack = R * (1 - Math.cos(Math.PI / 16));
+    for (let a = 0; a < Math.PI * 2; a += 0.05) {
+      // The landing bound: the die's 0.82 plus 0.3 of margin, inside the ring.
+      const bound = R - 1.12;
+      assert.ok(
+        clearance(bound * Math.cos(a), bound * Math.sin(a)) > 0.82,
+        `a die landing at radius ${bound}, angle ${a}, must clear the ring`,
+      );
+      // At the inscribed radius the ring is on top of the die: it never cuts
+      // inside R (clearance never goes negative), and it never lets a point
+      // there be more than the flats' own slack inside it either.
+      const c = clearance(R * Math.cos(a), R * Math.sin(a));
+      assert.ok(c >= -1e-9, `the ring cuts inside its own radius at ${a}: ${c}`);
+      assert.ok(c <= slack + 1e-9, `the ring bulges ${c} at ${a}, past ${slack}`);
+    }
+    // The flats bulge outward between planes. That slack has to stay under
+    // the landing margin or the bound stops being honest about the worst
+    // angle, which is the corner between two planes.
+    assert.ok(slack < 0.3, `corner slack ${slack} must stay under the margin`);
+  });
+});
+
+describe("reboundSpeed", () => {
+  it("is sqrt(2 g h) and round-trips through the ballistic rise", () => {
+    const g = 120;
+    for (const h of [0.5, 1.64, 6.56]) {
+      const v = reboundSpeed(h, -g, 0);
+      almost(v, Math.sqrt(2 * g * h), 1e-9);
+      almost((v * v) / (2 * g), h, 1e-9);
+    }
+  });
+
+  it("clamps a negative height to a standstill rather than returning NaN", () => {
+    assert.equal(reboundSpeed(-1, -120), 0);
+  });
+
+  // The authored bounce is a promise about the HEIGHT the die reaches. Under
+  // damping the ballistic speed lands it short, so the profile's own damping
+  // has to be inverted or the 4 die-heights quietly becomes 3.7.
+  it("reaches the height it was asked for, damped or not", () => {
+    const g = 120;
+    for (const d of [0, 0.2, 0.35, 0.6]) {
+      for (const h of [0.5, 1.64, 6.56]) {
+        const v = reboundSpeed(h, -g, d);
+        almost(dampedRise(v, -g, d), h, 1e-6);
+      }
+    }
+  });
+
+  it("needs more speed the more damping there is", () => {
+    const g = 120;
+    const speeds = [0, 0.2, 0.35, 0.6].map((d) => reboundSpeed(6.56, -g, d));
+    for (let i = 1; i < speeds.length; i++) {
+      assert.ok(
+        speeds[i] > speeds[i - 1],
+        `damping ${i} wanted ${speeds[i]}, no more than ${speeds[i - 1]}`,
+      );
+    }
+  });
+
+  it("the profile's own damping is inverted, so the authored bounce is honest", () => {
+    const h = THROW.bounceHeights[0] * 1.61;
+    almost(dampedRise(reboundSpeed(h)), h, 1e-6);
+  });
+});
+
+describe("riseVelocityAt", () => {
+  it("is the ballistic line when nothing is damping it", () => {
+    for (const t of [0, 0.02, 0.055]) almost(riseVelocityAt(40, t, -120, 0), 40 - 120 * t, 1e-9);
+  });
+
+  it("starts at v0 and falls faster than ballistic once damped", () => {
+    almost(riseVelocityAt(40, 0, -120, 0.35), 40, 1e-9);
+    for (const t of [0.02, 0.055, 0.2]) {
+      assert.ok(
+        riseVelocityAt(40, t, -120, 0.35) < 40 - 120 * t,
+        `damped rise at ${t}s must sit under the ballistic line`,
+      );
+    }
+  });
+
+  // Integrating the velocity to zero must give back the height dampedRise
+  // claims, which is the consistency check between the two formulas.
+  it("crosses zero exactly at the apex dampedRise predicts", () => {
+    const g = 120;
+    const d = 0.35;
+    const v0 = 40;
+    const lambda = -Math.log(1 - d);
+    const tApex = (1 / lambda) * Math.log(1 + (lambda * v0) / g);
+    almost(riseVelocityAt(v0, tApex, -g, d), 0, 1e-9);
+    // Trapezoid the velocity up to the apex; it must match the closed form.
+    let h = 0;
+    const n = 200000;
+    for (let i = 0; i < n; i++) {
+      const a = riseVelocityAt(v0, (tApex * i) / n, -g, d);
+      const b = riseVelocityAt(v0, (tApex * (i + 1)) / n, -g, d);
+      h += ((a + b) / 2) * (tApex / n);
+    }
+    almost(h, dampedRise(v0, -g, d), 1e-6);
+  });
+});
+
+describe("THROW profile", () => {
+  const inRange = (v, [lo, hi]) => v >= lo && v <= hi;
+
+  it("throwPose draws every component from THROW.launch", () => {
+    const L = THROW.launch;
+    for (const seed of [0, 0.25, 0.5, 0.75, 0.999]) {
+      const rng = () => seed;
+      const p = throwPose(rng);
+      assert.ok(inRange(p.position[0], L.x), `x ${p.position[0]}`);
+      assert.ok(inRange(p.position[1], L.y), `y ${p.position[1]}`);
+      assert.ok(inRange(p.position[2], L.z), `z ${p.position[2]}`);
+      assert.ok(inRange(p.velocity[0], L.vx), `vx ${p.velocity[0]}`);
+      assert.ok(inRange(p.velocity[1], L.vy), `vy ${p.velocity[1]}`);
+      assert.ok(inRange(p.velocity[2], L.vz), `vz ${p.velocity[2]}`);
+      for (let k = 0; k < 3; k++) {
+        assert.ok(Math.abs(p.angularVelocity[k]) <= L.spin[k] + 1e-9, `spin ${k}`);
+      }
+    }
+    for (let i = 0; i < 200; i++) {
+      const p = throwPose();
+      assert.ok(p.position[1] < 3, "launch is a hand height, not a ceiling drop");
+      assert.ok(p.velocity[2] < 0, "thrown into the arena (-z)");
+    }
+  });
+
+  it("every launch draw fits the whole die inside the arena", () => {
+    // The die's circumradius is ~0.82 (DIE_SCALE 0.72 on circumradius-1.12-1.22
+    // geometry), NOT 0.72 -- and a launch that clears the wall by less than
+    // that spawns the die inside it, where the solver ejects it at ~10 u/s.
+    // That was real: launch.z ran to 1.4 against a wall at 1.62.
+    const R = 0.82;
+    for (let i = 0; i < 500; i++) {
+      const p = throwPose();
+      const r = Math.hypot(p.position[0], p.position[2]);
+      assert.ok(
+        r + R < THROW.arena.radius,
+        `spawn at radius ${r} does not fit inside the ring at ${THROW.arena.radius}`,
+      );
+    }
+  });
+
+  it("the authored first bounce is four die-heights and reachable", () => {
+    assert.ok(THROW.bounceHeights.length >= 2, "two hops are authored");
+    assert.ok(THROW.bounceHeights[0] >= 1, "the first bounce is authored");
+    // Cam's ruling: the second hop must READ as a bounce in its own right and
+    // must not out-jump the first, or the chain looks like two throws.
+    assert.ok(
+      THROW.bounceHeights[1] < THROW.bounceHeights[0],
+      "the second hop must be smaller than the first",
+    );
+    assert.ok(THROW.bounceHeights[1] >= 1, "the second hop must still be visible");
+    // One die-height is ~1.64, so this is ~6.6 units of rise. The lid is the
+    // only thing above it and must stay clear, or the leap pings off it.
+    const rise = THROW.bounceHeights[0] * 1.76;
+    assert.ok(rise < 9, `a ${rise}-unit leap needs headroom under the lid`);
+    // The kick is a velocity, and the velocity that reaches h under g is
+    // sqrt(2gh) -- nothing else. A rebound of that speed must come back down
+    // hard enough to still count as a bounce, or the chain ends at one.
+    const v = reboundSpeed(rise);
+    assert.ok(v > THROW.bounceSpeed, `${v} u/s must outrun the bounce floor`);
+  });
+
+  it("derived constants come from the profile", () => {
+    assert.equal(GRAVITY_Y, THROW.gravityY);
+    assert.equal(FLIGHT_MAX_MS, THROW.flightMaxMs);
+    assert.equal(LIN_SLEEP, THROW.rest.lin);
+    assert.equal(ANG_SLEEP, THROW.rest.ang);
+    assert.ok(THROW.gravityY <= -120, "heavy: at least ~2.5x the old -48");
+    assert.ok(THROW.physStep <= 1 / 100, "fine steps for fast contacts");
+    // The slam's travel per step against the die's own 0.82 circumradius.
+    // Above about half of it the first contact lands a step late and deep.
+    const perStep = Math.abs(THROW.launch.vy[0]) * THROW.physStep;
+    assert.ok(perStep < 0.45, `${perStep} units per step is tunnelling range`);
+    assert.ok(
+      THROW.contact.wall.restitution <= 0.15,
+      "the ring is dead: a wall touch damps, it does not return the die",
+    );
+    assert.ok(
+      THROW.contact.wall.friction > THROW.contact.friction,
+      "the ring grips harder than the floor",
+    );
+    // cannon-es applies damping as v *= (1 - damping) ** dt. At 1 or more the
+    // base is zero or negative: the velocity flips sign every step and grows,
+    // and the die tunnels straight out through a wall. Found the hard way at
+    // angular 1.6 and linear 1.2 -- both looked like plausible tuning values
+    // and both put the die at z = -9 with the flight pinned at its cap.
+    assert.ok(THROW.damping.linear < 1, "damping must stay under 1");
+    assert.ok(THROW.damping.angular < 1, "damping must stay under 1");
+  });
+});
+
+describe("quatSlerp", () => {
+  const qn = (q) => {
+    const l = Math.hypot(...q);
+    return q.map((x) => x / l);
+  };
+  const a = [0, 0, 0, 1];
+  const b = qn([0, Math.sin(Math.PI / 4), 0, Math.cos(Math.PI / 4)]); // 90° about Y
+
+  it("hits both endpoints", () => {
+    assert.deepEqual(quatSlerp(a, b, 0), a);
+    for (let k = 0; k < 4; k++) almost(quatSlerp(a, b, 1)[k], b[k], 1e-9);
+  });
+
+  it("midpoint is unit length and halfway (45° about Y)", () => {
+    const m = quatSlerp(a, b, 0.5);
+    almost(Math.hypot(...m), 1, 1e-9);
+    almost(m[1], Math.sin(Math.PI / 8), 1e-6);
+    almost(m[3], Math.cos(Math.PI / 8), 1e-6);
+  });
+
+  it("takes the shortest arc when b is given as -b", () => {
+    const negB = b.map((x) => -x);
+    const m1 = quatSlerp(a, b, 0.5);
+    const m2 = quatSlerp(a, negB, 0.5);
+    // same rotation: dot is ±1
+    almost(Math.abs(m1[0] * m2[0] + m1[1] * m2[1] + m1[2] * m2[2] + m1[3] * m2[3]), 1, 1e-9);
+  });
+
+  it("off-midpoint diverges from a plain normalized lerp (proves the trig path, not nlerp)", () => {
+    const t = 0.25;
+    const naiveLerp = qn([
+      (1 - t) * a[0] + t * b[0],
+      (1 - t) * a[1] + t * b[1],
+      (1 - t) * a[2] + t * b[2],
+      (1 - t) * a[3] + t * b[3],
+    ]);
+    const s = quatSlerp(a, b, t);
+    const diff = Math.max(...s.map((v, i) => Math.abs(v - naiveLerp[i])));
+    assert.ok(diff > 1e-3, `expected slerp to diverge from nlerp at t=0.25, diff was ${diff}`);
+  });
+});
+
+describe("interpolateFrame", () => {
+  const f0 = { p: { x: 0, y: 1, z: 2 }, q: { x: 0, y: 0, z: 0, w: 1 }, lin: [0, 0, 0], ang: [0, 0, 0] };
+  const f1 = { p: { x: 2, y: 3, z: 4 }, q: { x: 0, y: 1, z: 0, w: 0 }, lin: [0, 0, 0], ang: [0, 0, 0] };
+
+  it("returns the endpoints at t=0 and t=1", () => {
+    assert.deepEqual(interpolateFrame(f0, f1, 0).p, [0, 1, 2]);
+    assert.deepEqual(interpolateFrame(f0, f1, 1).p, [2, 3, 4]);
+  });
+
+  it("position at the midpoint is the mean", () => {
+    assert.deepEqual(interpolateFrame(f0, f1, 0.5).p, [1, 2, 3]);
+  });
+
+  it("quaternion at the midpoint is unit length", () => {
+    almost(Math.hypot(...interpolateFrame(f0, f1, 0.5).q), 1, 1e-9);
+  });
+
+  it("clamps t outside [0,1]", () => {
+    assert.deepEqual(interpolateFrame(f0, f1, -0.5).p, [0, 1, 2]);
+    assert.deepEqual(interpolateFrame(f0, f1, 1.5).p, [2, 3, 4]);
   });
 });
