@@ -1173,7 +1173,11 @@ export function createDiceStage(canvas, video) {
   // rebuild. The frozen-hull gate reads this through debug().geom: `plump`
   // has already run by the time a mesh exists, so it needs no roll -- which
   // matters, because debug().dieHeight is null until one completes.
-  let positionHash = "00000000";
+  //
+  // null, never a zero-ish sentinel: a gate that compares hashes must fail
+  // loudly if it is polled before the first mesh exists, not quietly agree
+  // with a placeholder on both sides of the comparison.
+  let positionHash = null;
   let rolling = false;
   let heatedIndex = -1;
   let settleRoll = null;
@@ -2432,7 +2436,11 @@ export function createDiceStage(canvas, video) {
         // `positionHash` is the gate a hull-freezing task runs on;
         // `dieHeightRaw` is the same quantity as `dieHeight` unrounded, and
         // is reported as context rather than gated.
-        geom: { dieHeightRaw: dieHeight, positionHash },
+        //
+        // null while there is no mesh, so a capture taken before the first
+        // rebuild is obviously empty rather than a pair of placeholder
+        // values that would compare equal to each other and pass.
+        geom: die ? { dieHeightRaw: dieHeight, positionHash } : null,
         // How many authored rebounds fired, and how many were asked for. The
         // two must match on every roll; the soak reads both rather than
         // restating the profile's length as a literal.
