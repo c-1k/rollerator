@@ -6,7 +6,7 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import * as CANNON from "cannon-es";
-import { createRollController } from "./roll-engine.js?v=hand-throw1";
+import { createRollController } from "./roll-engine.js?v=faces512";
 import {
   CRANE_MS,
   FACE_UV_YAW,
@@ -32,11 +32,21 @@ import {
   triangleMedianUp,
   uniqueVertsAndFaces,
   upwardFaceIndex,
-} from "./physics-roll.js?v=hand-throw1";
+} from "./physics-roll.js?v=faces512";
 
 const DIE_SCALE = 0.72;
-const TEX_BODY = 2048;
-const TEX_FACE = 1024;
+// Face and body textures are painted pixel by pixel in JavaScript, so their
+// cost is quadratic in these two numbers and it is all on the main thread
+// before the first frame. The physics port raised them to 2048/1024 and first
+// paint went 6.7 s -> 18.7 s; these are the pre-port sizes (199a50d). The
+// painters below scale every pixel-space number off the live size, so the
+// look is the port's look, only cheaper -- see `bodyPBR` and `numberOverlay`.
+const TEX_BODY = 1024;
+const TEX_FACE = 512;
+// The sizes those painters' constants were authored against. Nothing but the
+// scale factors should read these.
+const REF_BODY = 2048;
+const REF_FACE = 1024;
 let texAniso = 8;
 
 export const DICE = {
@@ -297,6 +307,10 @@ function bodyPBR(theme, size = TEX_BODY) {
 
       const cloud = fbm(u * 2.6, v * 2.6);
       const milk = fbm(u * 6.5, v * 6.5);
+      // The only term here sampled in pixels rather than UV: pits are
+      // single-pixel specks, and a speck cannot be resampled without changing
+      // either its count or its size. Left alone deliberately -- at TEX_BODY
+      // 1024 this is the pre-port pit density, a look that shipped.
       const pit = hash2(x * 0.17 + 3.1, y * 0.29) > 0.991 ? 1 : 0;
       const stain = Math.max(0, fbm(u * 4.2 + 1.7, v * 3.4) - 0.58) * 1.8;
       const soot = Math.max(0, fbm(u * 3.1 + 0.4, v * 2.8) - 0.38) * 1.6;
@@ -345,7 +359,10 @@ function bodyPBR(theme, size = TEX_BODY) {
     }
   }
 
-  const strength = style === "lava" ? 2.8 : 1.55;
+  // The height field is sampled in UV, so a feature spans half as many pixels
+  // when `size` halves and the per-pixel gradient doubles. Scaling the
+  // strength with the size holds the relief where it was authored.
+  const strength = (style === "lava" ? 2.8 : 1.55) * (size / REF_BODY);
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const i = y * size + x;
@@ -496,7 +513,13 @@ function numberOverlay(label, hot, theme, maps) {
   const size = TEX_FACE;
   const cx = size / 2;
   const cy = size / 2;
-  const fs = label.length > 2 ? 280 : label.length > 1 ? 368 : 460;
+  // Every pixel-space number in this function was authored against a 1024
+  // face. `k` restates them as the same fractions of whatever TEX_FACE is, so
+  // the numerals keep their proportions -- and, for the relief below, their
+  // depth -- at the smaller texture. Metrics derived from `fs` (stroke widths,
+  // the baseline nudge, the bevel ramp) scale with it and need no `k`.
+  const k = size / REF_FACE;
+  const fs = Math.round((label.length > 2 ? 280 : label.length > 1 ? 368 : 460) * k);
   const font = `700 ${fs}px Cinzel, serif`;
 
   const maskC = document.createElement("canvas");
@@ -519,7 +542,7 @@ function numberOverlay(label, hot, theme, maps) {
   const maskPx = mctx.getImageData(0, 0, size, size).data;
   const glyph = new Float32Array(size * size);
   for (let i = 0; i < glyph.length; i++) glyph[i] = maskPx[i * 4] / 255;
-  const soft = blurGray(glyph, size, 6);
+  const soft = blurGray(glyph, size, Math.max(1, Math.round(6 * k)));
 
   const dirt = new THREE.Color(theme.ink);
   const dirtHot = new THREE.Color(theme.inkHot);
@@ -584,7 +607,7 @@ function numberOverlay(label, hot, theme, maps) {
   const N = nImg.data;
   const height = new Float32Array(size * size);
   for (let i = 0; i < glyph.length; i++) height[i] = 0.5 - soft[i] * 0.18 - glyph[i] * 0.36;
-  const strength = 8.2;
+  const strength = 8.2 * k;
   for (let y = 1; y < size - 1; y++) {
     for (let x = 1; x < size - 1; x++) {
       const i = y * size + x;
