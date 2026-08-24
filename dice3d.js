@@ -30,7 +30,9 @@ import {
   smoothProgress,
   snapQuaternion,
   throwPose,
+  polygonIncentre,
   triangleMedianUp,
+  uniquePolygon,
   uniqueVertsAndFaces,
   upwardFaceIndex,
 } from "./physics-roll.js?v=faces512";
@@ -49,6 +51,51 @@ const TEX_FACE = 512;
 const REF_BODY = 2048;
 const REF_FACE = 1024;
 let texAniso = 8;
+
+// The numeral engine, in fractions of TEX_FACE.
+//
+// Every face is mapped so its INSCRIBED CIRCLE -- not its bounding box, and
+// not the mean of however many vertices its triangulation happened to emit --
+// lands centred at UV (0.5, 0.5) with radius INCIRCLE_UV. A numeral sized
+// against that circle then sits inside every face of every die with the same
+// margin, which is the whole point: one size, one place, seven dice.
+const INCIRCLE_UV = 0.42;
+// Target ink CAP HEIGHT. Measured off the rendered glyph, not assumed from the
+// font size -- see `fitGlyph`.
+const CAP_UV = 0.23;
+// Ink may span this much of the incircle's diameter before the fit shrinks it.
+const FIT_CHORD = 0.86;
+// Floor on the cap height. If it ever binds, the label does not fit the die
+// and that is a defect to report, not to hide.
+const FS_FLOOR = 0.12;
+
+// FROZEN, and not a texture decision.
+//
+// `plump` runs a ramp from face centre to face corner, and that ramp shapes
+// the collision hull the shipped throw profile was certified against. It used
+// to read the ramp back out of the `uv` attribute -- which meant a texture
+// change silently reshaped the physics. It now reads the face's own geometry
+// instead, but it must reproduce the old numbers to the BIT, so the
+// normalisation the old UVs happened to impose is kept here as arithmetic:
+// the ramp value is quantised through float32 at the same point the `uv`
+// attribute quantised it. See `projectFaceUVs`.
+//
+// Byte-identical is a requirement, not a tolerance -- `debug().geom.positionHash`
+// is the gate. This constant is the reason it holds; it is not a knob.
+const RAMP_QUANT_SPAN = 0.46;
+
+// Where a face's CORNERS used to land in UV, and therefore the frame every
+// constant in the wear shader was calibrated against: `rim` ramps 0.18 -> 0.47
+// and `corner` 0.28 -> 0.5 in that frame, so both used to saturate at the
+// face's own edge.
+//
+// The incircle mapping moved the corners outward -- to 0.84 on a triangle,
+// 0.59 on a square, 0.52 on a pentagon -- which put the whole outer half of
+// every triangular face past the saturation point and stamped a dark disc on
+// it. The wear shader is therefore handed the scale that puts its input back
+// in this frame, rather than having eight calibration constants restated per
+// die shape. Task 3 replaces that shader; this keeps the look it is replacing.
+const LEGACY_CORNER_UV = 0.46;
 
 export const DICE = {
   d4: { sides: 4, min: 1 },
@@ -416,62 +463,135 @@ function blurGray(src, size, radius) {
   return out;
 }
 
-function runeSeed(label) {
-  let h = 2166136261;
-  for (let i = 0; i < label.length; i++) {
-    h ^= label.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return (h >>> 0) / 4294967296;
+// The mask's outline, as a fraction of the font size. It is drawn around every
+// glyph, so it IS ink -- the fit below counts it, or the numeral on the die
+// would come out 17 % taller than the size that was asked for.
+const GLYPH_STROKE = 0.12;
+
+function glyphFont(fs) {
+  return `700 ${fs}px Cinzel, serif`;
 }
 
-function mulberry(seed) {
-  let t = (seed * 1831565813) >>> 0;
-  return () => {
-    t += 0x6d2b79f5;
-    let r = Math.imul(t ^ (t >>> 15), 1 | t);
-    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
-    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+/**
+ * What the font will actually put on the texture at this size.
+ *
+ * Not the em box. The em box is a property of the font, not of the label:
+ * "20" and "7" set at the same size have the same em box and visibly
+ * different ink, which is how a die ends up with numerals that do not match
+ * each other. `actualBoundingBox*` measures the ink, and the stroke pad adds
+ * the outline the mask draws around it.
+ */
+function measureInk(ctx, label, fs) {
+  ctx.font = glyphFont(fs);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  const m = ctx.measureText(label);
+  const pad = (fs * GLYPH_STROKE) / 2;
+  const left = m.actualBoundingBoxLeft + pad;
+  const right = m.actualBoundingBoxRight + pad;
+  const ascent = m.actualBoundingBoxAscent + pad;
+  const descent = m.actualBoundingBoxDescent + pad;
+  return { left, right, ascent, descent, width: left + right, height: ascent + descent };
+}
+
+/**
+ * Solve for the font size that puts this label's ink at one optical size.
+ *
+ * Cap height first: every label on every die measures CAP_UV of the texture
+ * tall, so a "20" is the same weight on the page as a "7". Then width: if the
+ * ink would cross FIT_CHORD of the incircle's diameter it is scaled down by
+ * exactly that ratio and no further, which is what makes two digits as large
+ * as the face allows rather than as large as a constant allows.
+ *
+ * Ink scales linearly with font size, so a single probe measurement solves
+ * both -- and the answer is re-measured afterwards, because "it scales
+ * linearly" is a claim about a rasteriser, not a law.
+ */
+function fitGlyph(ctx, label, size) {
+  const probe = 100;
+  const p = measureInk(ctx, label, probe);
+  const capPerPx = p.height / probe;
+  const widthPerPx = p.width / probe;
+  if (!(capPerPx > 0) || !(widthPerPx > 0)) {
+    // No metrics at all -- a font that failed to load. Fall back to the base
+    // spec's preset ratio rather than dividing by zero.
+    const fs = Math.round(size * (label.length > 1 ? 0.17 : 0.23));
+    return { fs, ink: measureInk(ctx, label, fs), limit: "no-metrics" };
+  }
+
+  let fs = (CAP_UV * size) / capPerPx;
+  let limit = "cap";
+  const chord = FIT_CHORD * 2 * INCIRCLE_UV * size;
+  if (widthPerPx * fs > chord) {
+    fs = chord / widthPerPx;
+    limit = "width";
+  }
+  const floorFs = (FS_FLOOR * size) / capPerPx;
+  if (fs < floorFs) {
+    fs = floorFs;
+    limit = "floor";
+  }
+  fs = Math.round(fs * 1000) / 1000;
+
+  const ink = measureInk(ctx, label, fs);
+  const predicted = capPerPx * fs;
+  const residual = Math.abs(ink.height - predicted) / predicted;
+  if (residual > 0.01) {
+    console.warn(`[dice3d] glyph "${label}" measured ${(residual * 100).toFixed(2)}% off its solved size`);
+  }
+  return { fs, ink, limit, residual };
+}
+
+/**
+ * The ink box of what was actually rasterised, read back off the mask.
+ *
+ * Independent of everything above on purpose. `fitGlyph` says where the ink
+ * should land; this says where it did. The two agreeing is the centring gate,
+ * and it would not be a gate if both numbers came from the same measurement.
+ */
+function inkBoxFromMask(maskPx, size, threshold = 0.5) {
+  let x0 = size;
+  let y0 = size;
+  let x1 = -1;
+  let y1 = -1;
+  const cut = threshold * 255;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      if (maskPx[(y * size + x) * 4] < cut) continue;
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+    }
+  }
+  if (x1 < 0) return null;
+  return {
+    x: (x0 + x1 + 1) / 2,
+    y: (y0 + y1 + 1) / 2,
+    w: x1 - x0 + 1,
+    h: y1 - y0 + 1,
   };
 }
 
-function drawAncientMarks(ctx, size, label) {
-  const rng = mulberry(runeSeed(label) + 0.17);
-  const cx = size / 2;
-  const cy = size / 2;
-  ctx.save();
-  ctx.strokeStyle = "#fff";
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  const count = 2 + Math.floor(rng() * 3);
-  for (let i = 0; i < count; i++) {
-    const ang = rng() * Math.PI * 2;
-    const rad = size * (0.34 + rng() * 0.14);
-    const x = cx + Math.cos(ang) * rad;
-    const y = cy + Math.sin(ang) * rad;
-    const s = size * (0.03 + rng() * 0.05);
-    ctx.lineWidth = size * (0.006 + rng() * 0.005);
-    ctx.globalAlpha = 0.05 + rng() * 0.04;
-    ctx.beginPath();
-    ctx.moveTo(x, y - s);
-    ctx.lineTo(x, y + s);
-    const dir = rng() > 0.5 ? 1 : -1;
-    if (rng() > 0.22) {
-      ctx.moveTo(x, y - s * (0.15 + rng() * 0.4));
-      ctx.lineTo(x + dir * s * (0.45 + rng() * 0.4), y + s * (rng() * 0.5 - 0.1));
-    }
-    if (rng() > 0.45) {
-      ctx.moveTo(x - s * 0.35, y + s * 0.55);
-      ctx.lineTo(x + s * 0.35, y + s * (0.35 + rng() * 0.3));
-    }
-    if (rng() > 0.7) {
-      ctx.moveTo(x, y);
-      ctx.lineTo(x + dir * s * 0.55, y - s * 0.15);
-    }
-    ctx.stroke();
-  }
-  ctx.restore();
-}
+// Baked overlays, keyed `${skin.id}:${label}:${hot}`.
+//
+// Without this, every skin switch re-runs four full-texture pixel loops per
+// face -- roughly 10 ms each, twenty of them on a d20. The key stays correct
+// once the skins' ink treatments diverge, because a treatment is a pure
+// function of the skin's id.
+//
+// Bounded, and here is the arithmetic: an entry holds four 512x512 canvases,
+// which is 4 MB. Session-lifetime and unbounded, eight skins across twenty-nine
+// distinct labels would reach ~930 MB. The cap holds two full skins of the
+// largest die (2 x 20 = 40) with headroom, which is what the acceptance asks
+// for -- switch skin and back, and nothing rebakes. Eviction drops the
+// reference only; the canvases are never blanked, because a live material's
+// texture may still be pointing at one.
+const OVERLAY_CACHE_MAX = 48;
+const overlayCache = new Map();
+const overlayInk = new Map();
+let overlayHits = 0;
+let overlayMisses = 0;
 
 function inkLuma(hex) {
   const c = new THREE.Color(hex);
@@ -479,36 +599,74 @@ function inkLuma(hex) {
 }
 
 function numberOverlay(label, hot, skin, maps) {
+  const key = `${skin.id}:${label}:${hot}`;
+  const cached = overlayCache.get(key);
+  if (cached) {
+    overlayHits++;
+    // Refresh recency so the LRU keeps the skin the player is looking at.
+    overlayCache.delete(key);
+    overlayCache.set(key, cached);
+    return cached;
+  }
+  overlayMisses++;
+  const built = bakeNumberOverlay(label, hot, skin, maps);
+  overlayCache.set(key, built);
+  if (overlayCache.size > OVERLAY_CACHE_MAX) {
+    overlayCache.delete(overlayCache.keys().next().value);
+  }
+  return built;
+}
+
+function bakeNumberOverlay(label, hot, skin, maps) {
   const size = TEX_FACE;
   const cx = size / 2;
   const cy = size / 2;
   // Every pixel-space number in this function was authored against a 1024
   // face. `k` restates them as the same fractions of whatever TEX_FACE is, so
-  // the numerals keep their proportions -- and, for the relief below, their
-  // depth -- at the smaller texture. Metrics derived from `fs` (stroke widths,
-  // the baseline nudge, the bevel ramp) scale with it and need no `k`.
+  // the RELIEF -- the blur radius, the normal strength -- keeps its depth at
+  // the smaller texture. The glyph's own metrics no longer read `k` at all:
+  // they are solved from the measured ink against TEX_FACE, so they cannot
+  // drift with a texture-size decision.
   const k = size / REF_FACE;
-  const fs = Math.round((label.length > 2 ? 280 : label.length > 1 ? 368 : 460) * k);
-  const font = `700 ${fs}px Cinzel, serif`;
 
   const maskC = document.createElement("canvas");
   maskC.width = maskC.height = size;
   const mctx = maskC.getContext("2d");
+  const { fs, ink, limit } = fitGlyph(mctx, label, size);
+  const font = glyphFont(fs);
+  // Centre the INK box, not the em box. `left`/`right` and `ascent`/`descent`
+  // are measured from the alignment point, so these two offsets put the middle
+  // of the ink exactly on the middle of the texture -- which, after
+  // `projectFaceUVs`, is the middle of the face's inscribed circle. The old
+  // `cy + fs * 0.02` nudge was a by-eye correction for not doing this.
+  const gx = cx - (ink.right - ink.left) / 2;
+  const gy = cy + (ink.ascent - ink.descent) / 2;
+
   mctx.fillStyle = "#000";
   mctx.fillRect(0, 0, size, size);
-  drawAncientMarks(mctx, size, label);
   mctx.globalAlpha = 1;
   mctx.fillStyle = "#fff";
   mctx.strokeStyle = "#fff";
   mctx.lineJoin = "round";
   mctx.lineCap = "round";
-  mctx.lineWidth = fs * 0.12;
+  mctx.lineWidth = fs * GLYPH_STROKE;
   mctx.font = font;
-  mctx.textAlign = "center";
-  mctx.textBaseline = "middle";
-  mctx.strokeText(label, cx, cy + fs * 0.02);
-  mctx.fillText(label, cx, cy + fs * 0.02);
+  mctx.textAlign = "left";
+  mctx.textBaseline = "alphabetic";
+  mctx.strokeText(label, gx, gy);
+  mctx.fillText(label, gx, gy);
   const maskPx = mctx.getImageData(0, 0, size, size).data;
+  const box = inkBoxFromMask(maskPx, size);
+  overlayInk.set(`${skin.id}:${label}:${hot}`, {
+    fs,
+    limit,
+    // Offset of the rasterised ink box from the face's incentre, as a
+    // fraction of TEX_FACE, and the ink's height and width in the same units.
+    dx: box ? (box.x - cx) / size : null,
+    dy: box ? (box.y - cy) / size : null,
+    cap: box ? box.h / size : null,
+    wide: box ? box.w / size : null,
+  });
   const glyph = new Float32Array(size * size);
   for (let i = 0; i < glyph.length; i++) glyph[i] = maskPx[i * 4] / 255;
   const soft = blurGray(glyph, size, Math.max(1, Math.round(6 * k)));
@@ -559,13 +717,13 @@ function numberOverlay(label, hot, skin, maps) {
   e.fillStyle = hot ? skin.inkHot : skin.ink;
   e.strokeStyle = e.fillStyle;
   e.font = font;
-  e.textAlign = "center";
-  e.textBaseline = "middle";
+  e.textAlign = "left";
+  e.textBaseline = "alphabetic";
   e.lineJoin = "round";
   e.lineWidth = fs * 0.08;
   e.globalAlpha = hot ? 0.95 : 0.4;
-  e.strokeText(label, cx, cy + fs * 0.02);
-  e.fillText(label, cx, cy + fs * 0.02);
+  e.strokeText(label, gx, gy);
+  e.fillText(label, gx, gy);
   e.globalAlpha = 1;
 
   const nC = document.createElement("canvas");
@@ -647,9 +805,10 @@ function edgeLook(skin) {
   return { round: 0.58, rim: new THREE.Color("#3a2a1c"), glow: 0.04, rough: 0.7, paint: 0.36, metal: 0.12 };
 }
 
-function weatherMaterial(mat, skin, seed = 0.37) {
+function weatherMaterial(mat, skin, seed = 0.37, cornerUv = LEGACY_CORNER_UV) {
   const look = edgeLook(skin);
   mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uWearScale = { value: LEGACY_CORNER_UV / Math.max(cornerUv, 1e-6) };
     shader.uniforms.uRound = { value: look.round };
     shader.uniforms.uRimColor = { value: look.rim };
     shader.uniforms.uRimGlow = { value: look.glow };
@@ -681,14 +840,18 @@ function weatherMaterial(mat, skin, seed = 0.37) {
         uniform float uRimPaint;
         uniform float uRimMetal;
         uniform float uChipSeed;
+        uniform float uWearScale;
         varying vec3 vObjPos;
         varying vec2 vFaceUv;`
       )
       .replace(
         "#include <map_fragment>",
         `#include <map_fragment>
-        float radial = length(vFaceUv - vec2(0.5));
-        float nwear = fract(sin(dot(vFaceUv + uChipSeed, vec2(12.9898, 78.233))) * 43758.5453);
+        // Wear is read in the frame its constants were tuned in: the face's
+        // corner at 0.46, whatever the numeral mapping does with the UVs.
+        vec2 wearUv = (vFaceUv - vec2(0.5)) * uWearScale + vec2(0.5);
+        float radial = length(wearUv - vec2(0.5));
+        float nwear = fract(sin(dot(wearUv + uChipSeed, vec2(12.9898, 78.233))) * 43758.5453);
         float rim = smoothstep(0.18, 0.47, radial + nwear * 0.06);
         float corner = smoothstep(0.28, 0.5, radial + nwear * 0.04);
         float chips = 0.0;
@@ -702,7 +865,7 @@ function weatherMaterial(mat, skin, seed = 0.37) {
           float ang = h1 * 6.28318;
           vec2 site = vec2(0.5) + vec2(cos(ang), sin(ang)) * (0.34 + h2 * 0.16);
           float size = 0.016 + h2 * 0.034;
-          float d = length(vFaceUv - site);
+          float d = length(wearUv - site);
           chips = max(chips, smoothstep(size, size * 0.2, d));
         }
         chips *= smoothstep(0.2, 0.4, radial);
@@ -741,7 +904,7 @@ function weatherMaterial(mat, skin, seed = 0.37) {
   return mat;
 }
 
-function faceMaterial(label, hot, skin) {
+function faceMaterial(label, hot, skin, cornerUv = LEGACY_CORNER_UV) {
   const maps = bodyPBR(skin);
   const overlay = numberOverlay(label, hot, skin, maps);
   const map = texFrom(overlay.albedo);
@@ -780,7 +943,7 @@ function faceMaterial(label, hot, skin) {
     h ^= label.charCodeAt(i);
     h = Math.imul(h, 16777619);
   }
-  return weatherMaterial(mat, skin, (h >>> 0) / 4294967296);
+  return weatherMaterial(mat, skin, (h >>> 0) / 4294967296, cornerUv);
 }
 
 function faceTangentBasis(normal) {
@@ -810,6 +973,26 @@ function faceUvBasis(kind, a, b, c, normal) {
   return { n, texUp, texRight };
 }
 
+/**
+ * Lay the face's texture on it, and hand back the ramp `plump` runs on.
+ *
+ * Two jobs, one projection, because they must see the same numbers.
+ *
+ * The MAPPING is new: the face's inscribed circle goes to the middle of the
+ * texture at radius INCIRCLE_UV. It used to be the mean of the vertices in the
+ * group, scaled so the farthest of them reached 0.46 -- and the mean of a
+ * group is not a property of the face. `BoxGeometry` emits its quad as a
+ * strip and `DodecahedronGeometry` fans its pentagon about one vertex three
+ * times, so the "centre" moved with the triangulation; on a d12 that is 4 % of
+ * the face, upward, which is the "4 sits high" defect. Isosceles faces -- d4,
+ * d8, d10, d20 -- were off by more, because the mean of a triangle's corners
+ * is never where a circle fits inside it.
+ *
+ * The RAMP is old, deliberately and to the bit. See RAMP_QUANT_SPAN: it is the
+ * same quantity `plump` read out of the `uv` attribute before this change,
+ * computed from geometry and quantised the way the Float32Array quantised it,
+ * so the collision hull does not move.
+ */
 function projectFaceUVs(geo, start, count, texUp, texRight) {
   const pos = geo.attributes.position;
   const uv = geo.attributes.uv;
@@ -826,23 +1009,52 @@ function projectFaceUVs(geo, start, count, texUp, texRight) {
   }
   cu /= dots.length;
   cv /= dots.length;
+
+  // The frozen ramp: each vertex's distance from the face's vertex mean,
+  // normalised by the farthest, then put through the float32 round trip the
+  // `uv` attribute used to perform on it. `Math.fround` on the finished
+  // distance is NOT the same number -- measured, it differs by 4.8e-8 and
+  // moves the d10's hull at plump 0.34 -- because the old value was quantised
+  // per COMPONENT, before the hypot, not after it.
   let maxR = 0.0001;
   for (const d of dots) maxR = Math.max(maxR, Math.hypot(d.u - cu, d.v - cv));
+  const ramp = dots.map((d) => {
+    const qu = Math.fround(0.5 + ((d.u - cu) / maxR) * RAMP_QUANT_SPAN) - 0.5;
+    const qv = Math.fround(0.5 + ((d.v - cv) / maxR) * RAMP_QUANT_SPAN) - 0.5;
+    return { i: d.i, w: Math.hypot(qu, qv) / RAMP_QUANT_SPAN };
+  });
+
+  // The new mapping.
+  const { c, r } = polygonIncentre(uniquePolygon(dots.map((d) => [d.u, d.v])));
+  const scale = INCIRCLE_UV / Math.max(r, 1e-6);
+  let cornerUv = 0;
   for (const d of dots) {
-    uv.setXY(d.i, 0.5 + ((d.u - cu) / maxR) * 0.46, 0.5 + ((d.v - cv) / maxR) * 0.46);
+    const du = (d.u - c[0]) * scale;
+    const dv = (d.v - c[1]) * scale;
+    cornerUv = Math.max(cornerUv, Math.hypot(du, dv));
+    uv.setXY(d.i, 0.5 + du, 0.5 + dv);
   }
+  return { ramp, cornerUv };
 }
 
-function plump(geo, amount) {
+/**
+ * Round the die off toward its own circumsphere, hardest at the corners.
+ *
+ * FROZEN. This shapes the cannon `ConvexPolyhedron` and `dieHeight`, which
+ * scale the authored bounces and the rest gate, so the shipped throw profile
+ * was certified against exactly these vertices. `cornerRamp` is supplied by
+ * `projectFaceUVs` -- it used to be read back out of the `uv` attribute, which
+ * made the physics a hostage of the texture layout.
+ */
+function plump(geo, amount, cornerRamp) {
   const pos = geo.attributes.position;
-  const uv = geo.attributes.uv;
   let maxR = 0;
   for (let i = 0; i < pos.count; i++) {
     maxR = Math.max(maxR, new THREE.Vector3().fromBufferAttribute(pos, i).length());
   }
   for (let i = 0; i < pos.count; i++) {
     const v = new THREE.Vector3().fromBufferAttribute(pos, i);
-    const fromCenter = Math.hypot(uv.getX(i) - 0.5, uv.getY(i) - 0.5) / 0.46;
+    const fromCenter = cornerRamp[i];
     const corner = Math.pow(Math.min(1, Math.max(0, fromCenter)), 1.35);
     v.lerp(v.clone().setLength(maxR), amount * (0.28 + 0.72 * corner));
     pos.setXYZ(i, v.x, v.y, v.z);
@@ -925,21 +1137,33 @@ function prepareFaces(kind, skin) {
     normals.map((n) => [n.x, n.y, n.z])
   );
 
+  const cornerRamp = new Float64Array(pos.count);
+  // How far this die's face corners reach in UV. All faces of a die are
+  // congruent, so this is one number per die; the max is taken anyway so a
+  // shape with mixed faces could not quietly pick the wrong one.
+  let cornerUv = 0;
   for (let f = 0; f < faceCount; f++) {
     const { start, count } = starts[f];
     const a = new THREE.Vector3().fromBufferAttribute(pos, start);
     const b = new THREE.Vector3().fromBufferAttribute(pos, start + 1);
     const c = new THREE.Vector3().fromBufferAttribute(pos, start + 2);
     const { texUp, texRight } = faceUvBasis(kind, a, b, c, normals[f]);
-    projectFaceUVs(geo, start, count, texUp, texRight);
+    const projected = projectFaceUVs(geo, start, count, texUp, texRight);
+    for (const { i, w } of projected.ramp) cornerRamp[i] = w;
+    cornerUv = Math.max(cornerUv, projected.cornerUv);
     faceUps.push(texUp);
-    materials.push(faceMaterial(formatFace(kind, values[f]), false, skin));
+  }
+
+  // After the loop, not inside it: the wear shader needs this die's corner
+  // reach, and that is not known until every face has been projected.
+  for (let f = 0; f < faceCount; f++) {
+    materials.push(faceMaterial(formatFace(kind, values[f]), false, skin, cornerUv));
   }
 
   // FROZEN, and carried across verbatim from the old style ladder -- see the
   // note on `plump` in die-skins.js. It feeds the cannon hull and dieHeight,
   // so it is not a design knob.
-  plump(geo, skin.plump);
+  plump(geo, skin.plump, cornerRamp);
   const pos2 = geo.attributes.position;
   for (let f = 0; f < faceCount; f++) {
     const start = starts[f].start;
@@ -952,11 +1176,11 @@ function prepareFaces(kind, skin) {
   }
   geo.computeVertexNormals();
 
-  return { geo, materials, normals, faceUps, values };
+  return { geo, materials, normals, faceUps, values, cornerUv };
 }
 
 function makeDieMesh(kind, skin) {
-  const { geo, materials, normals, faceUps, values } = prepareFaces(kind, skin);
+  const { geo, materials, normals, faceUps, values, cornerUv } = prepareFaces(kind, skin);
   const mesh = new THREE.Mesh(geo, materials);
   mesh.castShadow = true;
   const core = new THREE.PointLight(skin.core, skin.id === "lava" ? skin.coreGain : 0, 6, 2);
@@ -968,7 +1192,9 @@ function makeDieMesh(kind, skin) {
     );
     mesh.add(magma);
   }
-  mesh.userData = { kind, normals, faceUps, values, materials, core, swappedPair: null };
+  // `cornerUv` rides on the mesh so a face re-baked later -- swapFace's hot
+  // bake -- gets the same wear frame as the faces built beside it.
+  mesh.userData = { kind, normals, faceUps, values, materials, core, cornerUv, swappedPair: null };
   return mesh;
 }
 
@@ -1178,6 +1404,10 @@ export function createDiceStage(canvas, video) {
   // loudly if it is polled before the first mesh exists, not quietly agree
   // with a placeholder on both sides of the comparison.
   let positionHash = null;
+  // Wall time of the last rebuild(). Every face texture is painted pixel by
+  // pixel on the main thread inside it, so this is where a load-time
+  // regression shows up first.
+  let buildMs = null;
   let rolling = false;
   let heatedIndex = -1;
   let settleRoll = null;
@@ -1445,6 +1675,7 @@ export function createDiceStage(canvas, video) {
   }
 
   function rebuild() {
+    const t0 = performance.now();
     abortRoll();
     heatedIndex = -1;
     disposeDie();
@@ -1459,6 +1690,7 @@ export function createDiceStage(canvas, video) {
     camFrom.copy(idleCam);
     camTo.copy(idleCam);
     fitBackground();
+    buildMs = +(performance.now() - t0).toFixed(2);
   }
 
   function setKind(next, nextEnv, nextSkin) {
@@ -1479,7 +1711,7 @@ export function createDiceStage(canvas, video) {
   function swapFace(target, index, label, hot) {
     const mats = target.userData.materials;
     const old = mats[index];
-    const next = faceMaterial(label, hot, theme());
+    const next = faceMaterial(label, hot, theme(), target.userData.cornerUv);
     mats[index] = next;
     target.material[index] = next;
     old.map?.dispose();
@@ -2441,6 +2673,16 @@ export function createDiceStage(canvas, video) {
         // rebuild is obviously empty rather than a pair of placeholder
         // values that would compare equal to each other and pass.
         geom: die ? { dieHeightRaw: dieHeight, positionHash } : null,
+        // How long the last rebuild() took, and how much of it the overlay
+        // cache saved. `misses` is the number of faces actually painted:
+        // it should equal the die's face count the first time a skin is seen
+        // and stop rising after that.
+        buildMs,
+        overlayCache: { size: overlayCache.size, hits: overlayHits, misses: overlayMisses },
+        // Per baked face, read back off the rasterised mask rather than
+        // predicted: the ink box's offset from the face's incentre and its
+        // size, both as fractions of TEX_FACE. Keyed as the cache is.
+        glyphInk: Object.fromEntries(overlayInk),
         // How many authored rebounds fired, and how many were asked for. The
         // two must match on every roll; the soak reads both rather than
         // restating the profile's length as a literal.
@@ -2463,10 +2705,16 @@ export function createDiceStage(canvas, video) {
         // opposite them. That is the shape, not a fault.
         topFaceDeg: lastRoll?.topFaceDeg ?? null,
         // The glyph's in-plane angle ON SCREEN at the current camera, degrees,
-        // signed, 0 = upright. This is what "off axis" actually looks like to
-        // a player, and it is measured rather than inferred: project the rest
-        // point and the same point pushed along the numeral's up direction,
-        // and take the angle of the resulting 2D vector from screen-up.
+        // signed. This is what "off axis" actually looks like to a player, and
+        // it is measured rather than inferred: project the rest point and the
+        // same point pushed along the numeral's up direction, and take the
+        // angle of the resulting 2D vector from screen-up.
+        //
+        // UPRIGHT IS +-180, NOT 0. `faceUps` points at the glyph's FOOT, so a
+        // square numeral reads as a vector pointing down the screen. The
+        // deviation is `180 - Math.abs(glyphDeg)`, which is what
+        // `expectGlyphSquare` (e2e/roll.spec.js) asserts on. This comment used
+        // to say "0 = upright" and was simply wrong about its own code.
         glyphDeg: (() => {
           if (!die || !lastRoll?.landedQuat || lastRoll.index == null) return null;
           const t = die.userData.faceUps[lastRoll.index];

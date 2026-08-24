@@ -27,9 +27,11 @@ import {
   snapProgress,
   smoothProgress,
   snapQuaternion,
+  polygonIncentre,
   swapValueFaces,
   throwPose,
   triangleMedianUp,
+  uniquePolygon,
   uniqueVertsAndFaces,
   upwardFaceIndex,
 } from "./physics-roll.js";
@@ -716,5 +718,272 @@ describe("interpolateFrame", () => {
   it("clamps t outside [0,1]", () => {
     assert.deepEqual(interpolateFrame(f0, f1, -0.5).p, [0, 1, 2]);
     assert.deepEqual(interpolateFrame(f0, f1, 1.5).p, [2, 3, 4]);
+  });
+});
+
+/**
+ * One real face, captured rather than idealised.
+ *
+ * The d10's face projected into its own texture basis exactly as
+ * `prepareFaces` does it -- `p.dot(texRight)`, `p.dot(texUp)` -- read off a
+ * live `trapezohedron()` in the browser (throwaway probe against the dev
+ * server, 2026-08-24).
+ *
+ * It is a TRIANGLE, not a kite. `trapezohedron()` merges two open
+ * `ConeGeometry(1, 1.18, 5, 1, true)` halves, and three.js emits ONE triangle
+ * per radial segment when `radiusTop` is 0 and there is a single height
+ * segment -- so the solid is a pentagonal bipyramid: 10 triangular faces, 30
+ * non-indexed vertices, one triangle per face group. The face is isosceles,
+ * so its incentre sits on the axis of symmetry, pushed away from the vertex
+ * mean toward the narrow end. That displacement is the whole point of the
+ * fixture: it is the numeral offset a player sees.
+ */
+const D10_FACE = [
+  [-0.536746279291593, -0.5164078400641089],
+  [0.6323843431851929, -0.3935272776983372],
+  [-0.10173005372106768, 0.967896945958624],
+];
+
+/** The d6's face group: two triangles in STRIP order, not fan order. */
+const D6_FACE = [
+  [-0.6100000143051147, 0.6100000143051147],
+  [-0.6100000143051147, -0.6100000143051147],
+  [0.6100000143051147, 0.6100000143051147],
+  [-0.6100000143051147, -0.6100000143051147],
+  [0.6100000143051147, -0.6100000143051147],
+  [0.6100000143051147, 0.6100000143051147],
+];
+
+/** The d12's face group: three triangles fanned about the THIRD vertex. */
+const D12_FACE = [
+  [0.6443442387108318, -0.21701884082424994],
+  [0.40551050549784823, 0.5457454134775641],
+  [-0.007283943055897302, -0.6798704071913091],
+  [0.40551050549784823, 0.5457454134775641],
+  [-0.3937250920237285, 0.5543080891904888],
+  [-0.007283943055897302, -0.6798704071913091],
+  [-0.3937250920237285, 0.5543080891904888],
+  [-0.6488460857598954, -0.2031641278010633],
+  [-0.007283943055897302, -0.6798704071913091],
+];
+
+function shoelace(poly) {
+  let a = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i];
+    const q = poly[(i + 1) % poly.length];
+    a += p[0] * q[1] - q[0] * p[1];
+  }
+  return a / 2;
+}
+
+/** Perpendicular distance from `c` to each edge line of `poly`, in order. */
+function edgeDistances(poly, c) {
+  return poly.map((p, i) => {
+    const q = poly[(i + 1) % poly.length];
+    const ex = q[0] - p[0];
+    const ey = q[1] - p[1];
+    return Math.abs((c[0] - p[0]) * ey - (c[1] - p[1]) * ex) / Math.hypot(ex, ey);
+  });
+}
+
+function vertexMean(poly) {
+  let x = 0;
+  let y = 0;
+  for (const p of poly) {
+    x += p[0];
+    y += p[1];
+  }
+  return [x / poly.length, y / poly.length];
+}
+
+function regularPolygon(n, radius = 1, phase = Math.PI / 2) {
+  return Array.from({ length: n }, (_, i) => {
+    const t = phase + (2 * Math.PI * i) / n;
+    return [radius * Math.cos(t), radius * Math.sin(t)];
+  });
+}
+
+describe("uniquePolygon", () => {
+  it("leaves an already-unique ring alone", () => {
+    assert.deepEqual(uniquePolygon(D10_FACE), D10_FACE);
+  });
+
+  it("drops the duplicates a fan leaves behind", () => {
+    const ring = uniquePolygon(D12_FACE);
+    assert.equal(ring.length, 5);
+    for (const p of ring) {
+      assert.ok(
+        D12_FACE.some((q) => q[0] === p[0] && q[1] === p[1]),
+        `${p} is not one of the source vertices`
+      );
+    }
+  });
+
+  it("returns a simple ring, not the order the triangles arrived in", () => {
+    // The d12's fan visits its apex three times and its rim out of order, so
+    // first-seen order is a self-crossing sequence. A polygon that crosses
+    // itself has no incircle, which is why this matters and is asserted
+    // rather than assumed: consecutive vertices must turn consistently.
+    const ring = uniquePolygon(D12_FACE);
+    const c = vertexMean(ring);
+    for (let i = 0; i < ring.length; i++) {
+      const p = ring[i];
+      const q = ring[(i + 1) % ring.length];
+      const cross = (p[0] - c[0]) * (q[1] - c[1]) - (p[1] - c[1]) * (q[0] - c[0]);
+      assert.ok(cross !== 0, "a ring vertex is collinear with the centre");
+      assert.ok(
+        Math.sign(cross) === Math.sign(shoelace(ring)),
+        `vertices ${i} and ${i + 1} wind against the polygon`
+      );
+    }
+  });
+
+  it("preserves winding", () => {
+    // Both source faces are wound the same way as their first triangle; the
+    // ring must come back on that same side, or the numeral's texture would
+    // be mirrored on half the die.
+    for (const face of [D6_FACE, D12_FACE]) {
+      const firstTriangle = shoelace(face.slice(0, 3));
+      assert.equal(Math.sign(shoelace(uniquePolygon(face))), Math.sign(firstTriangle));
+    }
+    const cw = regularPolygon(5).slice().reverse();
+    assert.ok(shoelace(uniquePolygon(cw)) < 0, "a clockwise input must stay clockwise");
+  });
+
+  it("untangles a strip as well as a fan", () => {
+    // BoxGeometry emits its quad as a STRIP -- first-seen order is a bowtie.
+    const ring = uniquePolygon(D6_FACE);
+    assert.equal(ring.length, 4);
+    almost(Math.abs(shoelace(ring)), 1.22 * 1.22, 1e-6);
+  });
+
+  it("survives degenerate input", () => {
+    assert.deepEqual(uniquePolygon([]), []);
+    assert.equal(uniquePolygon([[1, 1], [1, 1], [1, 1]]).length, 1);
+    assert.equal(uniquePolygon([[0, 0], [1e-9, -1e-9]]).length, 1);
+  });
+});
+
+describe("polygonIncentre", () => {
+  it("is the centroid for an equilateral triangle", () => {
+    const t = regularPolygon(3);
+    const { c, r } = polygonIncentre(t);
+    vecAlmost(c, vertexMean(t), 1e-12);
+    almost(r, 0.5, 1e-12); // inradius of a unit-circumradius equilateral
+  });
+
+  it("is (1, 1) with r = 1 for a 3-4-5 right triangle on the axes", () => {
+    const { c, r } = polygonIncentre([
+      [0, 0],
+      [3, 0],
+      [0, 4],
+    ]);
+    vecAlmost(c, [1, 1], 1e-12);
+    almost(r, 1, 1e-12);
+  });
+
+  it("is the centre with r = 0.5 for the unit square", () => {
+    const { c, r } = polygonIncentre([
+      [0, 0],
+      [1, 0],
+      [1, 1],
+      [0, 1],
+    ]);
+    vecAlmost(c, [0.5, 0.5], 1e-12);
+    almost(r, 0.5, 1e-12);
+  });
+
+  it("is the centre with r = the apothem for a regular pentagon", () => {
+    const p = regularPolygon(5, 1.3);
+    const { c, r } = polygonIncentre(p);
+    vecAlmost(c, [0, 0], 1e-12);
+    almost(r, 1.3 * Math.cos(Math.PI / 5), 1e-12);
+  });
+
+  it("touches all four edges of a kite, which the vertex mean does not", () => {
+    // Every kite is tangential, so an exact incircle exists. This one is
+    // deliberately lopsided: the vertex mean misses the incentre by 0.42.
+    const kite = [
+      [0, 6],
+      [2, 0],
+      [0, -1],
+      [-2, 0],
+    ];
+    const { c, r } = polygonIncentre(kite);
+    for (const d of edgeDistances(kite, c)) almost(d, r, 1e-9);
+    const mean = vertexMean(kite);
+    assert.ok(Math.hypot(c[0] - mean[0], c[1] - mean[1]) > 1e-3, "kite incentre collapsed onto the vertex mean");
+    // area / semiperimeter, independently computed from the diagonals.
+    almost(r, ((7 * 4) / 2) / (Math.hypot(2, 6) + Math.hypot(2, 1)), 1e-9);
+  });
+
+  it("touches every edge of the d10's real face, and is not its vertex mean", () => {
+    const { c, r } = polygonIncentre(uniquePolygon(D10_FACE));
+    const d = edgeDistances(D10_FACE, c);
+    assert.equal(d.length, 3, "the d10 face is a triangle -- see D10_FACE");
+    for (const x of d) almost(x, r, 1e-6);
+    const mean = vertexMean(D10_FACE);
+    const drift = Math.hypot(c[0] - mean[0], c[1] - mean[1]);
+    assert.ok(drift > 1e-3, `incentre and vertex mean coincide (${drift}) -- the remap would be a no-op`);
+  });
+
+  it("touches every edge of the d12's real face", () => {
+    const ring = uniquePolygon(D12_FACE);
+    const { c, r } = polygonIncentre(ring);
+    for (const x of edgeDistances(ring, c)) almost(x, r, 1e-6);
+    // The incentre of a regular pentagon is its centre, so it agrees with the
+    // mean of the FIVE real vertices exactly...
+    vecAlmost(c, vertexMean(ring), 1e-9);
+    // ...and disagrees with the mean of the NINE the fan actually emits, which
+    // is dragged toward the thrice-visited apex. ~0.029 against a circumradius
+    // of 0.68 -- 4 % of the face, downward, which is the "4 sits high on the
+    // d12" defect measured.
+    const raw = vertexMean(D12_FACE);
+    const drag = Math.hypot(c[0] - raw[0], c[1] - raw[1]);
+    assert.ok(drag > 0.02, `the fan-duplicated mean should be dragged off centre, got ${drag}`);
+  });
+
+  it("returns finite numbers for degenerate input instead of throwing", () => {
+    for (const poly of [[], [[2, 3]], [[2, 3], [2, 3]], [[1, 1], [1, 1], [1, 1]], [[0, 0], [1, 1]]]) {
+      const { c, r } = polygonIncentre(poly);
+      assert.ok(Number.isFinite(c[0]) && Number.isFinite(c[1]), `centre not finite for ${JSON.stringify(poly)}`);
+      assert.ok(Number.isFinite(r) && r >= 0, `radius not finite for ${JSON.stringify(poly)}`);
+    }
+  });
+});
+
+/**
+ * Sorted-key, recursive stringify -- a stable serialisation of THROW so it can
+ * be hashed. Deliberately NOT a copy of the literal: THROW is ninety lines of
+ * the densest comments in this project, and a duplicate in a test file is a
+ * second source of truth that rots the first time somebody edits one of them.
+ */
+function stableStringify(v) {
+  if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;
+  if (v && typeof v === "object") {
+    const keys = Object.keys(v).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(v[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(v);
+}
+
+function fnv1a(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+describe("THROW change-detector", () => {
+  // The die redesign is texture work. It has no business moving a throw
+  // number, and "I did not mean to" is not evidence -- this is.
+  //
+  // Regenerate ONLY with a deliberate, reviewed profile change:
+  //   node -e 'import("./physics-roll.js").then(m=>{const s=v=>Array.isArray(v)?`[${v.map(s).join(",")}]`:v&&typeof v==="object"?`{${Object.keys(v).sort().map(k=>`${JSON.stringify(k)}:${s(v[k])}`).join(",")}}`:JSON.stringify(v);let h=2166136261;const t=s(m.THROW);for(let i=0;i<t.length;i++){h^=t.charCodeAt(i);h=Math.imul(h,16777619);}console.log((h>>>0).toString(16).padStart(8,"0"));})'
+  it("THROW is unchanged by the die redesign", () => {
+    assert.equal(fnv1a(stableStringify(THROW)), "82236432");
   });
 });
