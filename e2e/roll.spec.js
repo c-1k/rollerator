@@ -229,6 +229,29 @@ test("every die rolls to a legal face and reports it", async ({ page }) => {
 });
 
 /**
+ * The presented numeral must read upright.
+ *
+ * This holds by construction rather than by tuning: `revealCamera` sets the
+ * camera's up vector to the ground-plane projection of the numeral's own
+ * in-face up direction, so the glyph is square whatever yaw the die stopped
+ * at. `glyphDeg` measures it anyway, because "by construction" is exactly the
+ * kind of property that a later change to camera.up would silently break --
+ * point the camera at world-up to avoid roll, say, and every numeral goes
+ * crooked with no test to notice.
+ *
+ * Upright is +-180, not 0: the stored `faceUps` vector points toward the
+ * glyph's foot on screen. What is asserted is the deviation from that.
+ */
+async function expectGlyphSquare(page, where) {
+  const deg = await page.evaluate(() => window.__dice.debug().glyphDeg);
+  const off = 180 - Math.abs(deg);
+  expect(
+    off,
+    `${where}: the presented numeral reads ${off.toFixed(1)}deg off upright (glyphDeg ${deg})`,
+  ).toBeLessThan(10);
+}
+
+/**
  * The quote card must not land on top of the die. The crane ends close enough
  * that a dead-centre reveal would put the die behind the card, so the reveal
  * lifts the die into the upper part of the frame; this is that ruling as a
@@ -280,6 +303,7 @@ test("switching environment clears the previous result; resizing keeps the revea
   );
 
   await expectDieClearsCard(page, "landscape 1280x900");
+  await expectGlyphSquare(page, "landscape 1280x900");
 
   // Invariant 4: the result stays presented across a resize. The die keeps its
   // physics rest pose, so the camera -- not the die -- has to re-frame for the
@@ -303,6 +327,7 @@ test("switching environment clears the previous result; resizing keeps the revea
   // clearance has to hold here too -- this is the orientation whose framing
   // actually changed.
   await expectDieClearsCard(page, "portrait 800x1000");
+  await expectGlyphSquare(page, "portrait 800x1000");
   expect(
     d.reveal,
     "a presented result must still carry its reveal",

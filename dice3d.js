@@ -1160,6 +1160,9 @@ export function createDiceStage(canvas, video) {
   let camTween = 0;
   let lastTick = performance.now();
   const PHYS_STEP = THROW.physStep;
+  // How much looser than "at rest" counts as "settling" for righting. See the
+  // note at the righting check.
+  const SETTLE_SLACK = 3;
   const IMPACT_SPEED_FLOOR = THROW.bounceSpeed;
   // How long after a counted impact further contacts belong to the same one.
   // Well above PHYS_STEP (8.3 ms), so the contact points of one landing always
@@ -1517,6 +1520,95 @@ export function createDiceStage(canvas, video) {
     mesh.userData.swappedPair = [idx, j];
   }
 
+  /**
+   * The angle between the presented face's normal and world-up, in degrees.
+   * Zero is dead flat. This is the number a "cocked" die scores high on.
+   */
+  function faceTiltDeg(mesh, index, quat, axisY) {
+    const n = mesh.userData.normals[index];
+    const w = rotateByQuat([n.x, n.y, n.z], quat);
+    const len = Math.hypot(w[0], w[1], w[2]) || 1;
+    const c = Math.min(1, Math.max(-1, (w[1] / len) * axisY));
+    return +((Math.acos(c) * 180) / Math.PI).toFixed(2);
+  }
+
+  /**
+   * How far the face the die is RESTING ON sits off the floor, in degrees, and
+   * which face that is.
+   *
+   * This -- not the tilt of the presented face -- is what "cocked" means, and
+   * the difference is not pedantry. On a d6 or a d20 the two are identical,
+   * because their faces come in parallel pairs. On a d10 or d100 they are
+   * nothing alike: a pentagonal trapezohedron's kite faces are NOT parallel to
+   * the ones opposite them, so a d10 sitting perfectly flat still presents its
+   * numeral on a face tilted 20-31 degrees. Measured, over 8 rolls: top face
+   * 15.6-31.5 degrees while the resting face was 1.0-9.2. Gating the presented
+   * face would have declared every honest d10 rest cocked and tried to "right"
+   * a die that was already flat.
+   *
+   * Resting-face tilt is shape-independent: a die physically flat on a face
+   * has that face's plane on the floor, whatever the solid.
+   */
+  function bottomFaceTilt(mesh, quat) {
+    const ns = mesh.userData.normals;
+    let best = 0;
+    let bestDot = Infinity;
+    for (let i = 0; i < ns.length; i++) {
+      const w = rotateByQuat([ns[i].x, ns[i].y, ns[i].z], quat);
+      if (w[1] < bestDot) {
+        bestDot = w[1];
+        best = i;
+      }
+    }
+    return { index: best, deg: faceTiltDeg(mesh, best, quat, -1) };
+  }
+
+  /**
+   * Nudge a cocked die toward flat. The die is at a would-be rest, leaning on
+   * the face `bottomFaceTilt` found; rotate that face's normal toward straight
+   * down by spinning about the axis perpendicular to both, and lift very
+   * slightly so the die can pivot on an edge instead of grinding against the
+   * floor. A die stopped against the ring also gets a push inward, because a
+   * lean held up by a wall cannot fall flat while the wall is still there.
+   *
+   * Small on purpose: this runs inside the silent simulation, so every nudge
+   * is simulation time spent, and the click-to-number ceiling is real.
+   */
+  function applyRighting(quat) {
+    const R = THROW.righting;
+    const { index } = bottomFaceTilt(die, quat);
+    const n = die.userData.normals[index];
+    const w = rotateByQuat([n.x, n.y, n.z], quat);
+    // The axis that turns the resting face's normal toward straight down is
+    // cross(w, down) for down = [0, -1, 0], which reduces to [w.z, 0, -w.x].
+    const axis = [w[2], 0, -w[0]];
+    const len = Math.hypot(axis[0], axis[2]);
+    dieBody.wakeUp();
+    if (len > 1e-6) {
+      const tiltRad = Math.acos(Math.min(1, Math.max(-1, -w[1])));
+      const omega = Math.min(R.spinMax, Math.max(0.8, tiltRad * R.spin));
+      dieBody.angularVelocity.set(
+        (axis[0] / len) * omega,
+        0,
+        (axis[2] / len) * omega,
+      );
+    }
+    dieBody.velocity.y = Math.max(dieBody.velocity.y, R.lift);
+    // Off the wall, if that is what is holding the lean up.
+    const r = Math.hypot(dieBody.position.x, dieBody.position.z);
+    if (r > THROW.arena.radius - 1.5 && r > 1e-6) {
+      dieBody.velocity.x -= (dieBody.position.x / r) * R.wallPush;
+      dieBody.velocity.z -= (dieBody.position.z / r) * R.wallPush;
+    }
+  }
+
+  function topFaceTiltDeg(mesh, index, quat) {
+    const n = mesh.userData.normals[index];
+    const w = rotateByQuat([n.x, n.y, n.z], quat);
+    const len = Math.hypot(w[0], w[1], w[2]) || 1;
+    return +((Math.acos(Math.min(1, Math.max(-1, w[1] / len))) * 180) / Math.PI).toFixed(2);
+  }
+
   function captureLanded(st) {
     const mesh = st.mesh;
     st.index = landedIndex(mesh);
@@ -1538,10 +1630,21 @@ export function createDiceStage(canvas, video) {
       apex2Heights: st.metrics?.apex2Heights ?? null,
       dieHeight: st.metrics?.dieHeight ?? null,
       kicks: st.metrics?.kicks ?? null,
+      rightingNudges: st.metrics?.rightingNudges ?? null,
       tailSpin: st.metrics?.tailSpin ?? null,
       __hits: st.metrics?.__hits ?? null,
       heldFrames: 0,
     };
+    // How far the presented face is from level, in degrees. A die that sleeps
+    // leaning -- most often one stopped against the invisible wall -- presents
+    // its numeral tilted no matter what the camera does, because the reveal
+    // squares the glyph by projecting its in-face up onto the GROUND plane and
+    // that projection is only faithful while the face is level.
+    // `cockedDeg` is the RESTING face's tilt -- see bottomFaceTilt. The
+    // presented face's own tilt is reported alongside it as context, because
+    // on a d10 it is large and blameless.
+    lastRoll.cockedDeg = bottomFaceTilt(mesh, st.landedQuat).deg;
+    lastRoll.topFaceDeg = topFaceTiltDeg(mesh, st.index, st.landedQuat);
     // Where the die came to rest, with the height for THIS pose (the old code
     // reused the idle pose's settleY for every landing).
     const restY = Math.max(0.08, restOffsetY(localVerts, st.landedQuat, DIE_SCALE));
@@ -1847,6 +1950,9 @@ export function createDiceStage(canvas, video) {
     let apexOpen = false;
     // The rise of each authored hop, in world units, in order.
     const rises = [];
+    // Righting nudges spent on this throw, by budget. See THROW.righting.
+    let rightedEarly = 0;
+    let rightedRest = 0;
     const counted = (last) => ms !== last && ms - last >= BOUNCE_REFRACTORY_MS;
     const onCollide = (e) => {
       const speed = Math.abs(e.contact.getImpactVelocityAlongNormal());
@@ -1928,7 +2034,45 @@ export function createDiceStage(canvas, video) {
           }
         }
         const f = frames[frames.length - 1];
-        if (atRest(f.lin, f.ang, dieBody.position.y)) break;
+        const onFloor = dieBody.position.y <= dieHeight;
+        // Righting is cheapest BEFORE the die has fully stopped. A nudge given
+        // while it is still settling blends into the motion already there; one
+        // given after a dead stop costs an entire fresh settle, and that is
+        // simulation time charged straight to the click budget. So the check
+        // runs on a "nearly stopped" predicate a few times looser than rest.
+        const settling =
+          onFloor &&
+          Math.hypot(f.lin[0], f.lin[1], f.lin[2]) < THROW.rest.lin * SETTLE_SLACK &&
+          Math.hypot(f.ang[0], f.ang[1], f.ang[2]) < THROW.rest.ang * SETTLE_SLACK;
+        const bodyQuat = () => [
+          dieBody.quaternion.x,
+          dieBody.quaternion.y,
+          dieBody.quaternion.z,
+          dieBody.quaternion.w,
+        ];
+        const leaning = (q) =>
+          bottomFaceTilt(die, q).deg > THROW.righting.toleranceDeg;
+        if (rightedEarly < THROW.righting.early && settling) {
+          const q = bodyQuat();
+          if (leaning(q)) {
+            applyRighting(q);
+            rightedEarly += 1;
+            continue;
+          }
+        }
+        if (atRest(f.lin, f.ang, dieBody.position.y)) {
+          // The reserved budget: a lean at a genuine stop always gets tries of
+          // its own, however many were spent on the way down.
+          if (rightedRest < THROW.righting.rest) {
+            const q = bodyQuat();
+            if (leaning(q)) {
+              applyRighting(q);
+              rightedRest += 1;
+              continue;
+            }
+          }
+          break;
+        }
       }
     } finally {
       dieBody.removeEventListener("collide", onCollide);
@@ -1942,6 +2086,7 @@ export function createDiceStage(canvas, video) {
     metrics.apex2 = +(rises[1] ?? 0).toFixed(3);
     metrics.apex2Heights = +((rises[1] ?? 0) / dieHeight).toFixed(3);
     metrics.kicks = kicks;
+    metrics.rightingNudges = rightedEarly + rightedRest;
     // How fast the die is still turning as it comes to rest. This is NOT a
     // bound -- Cam's ruling is maximum visible spin ("i want that shit
     // SPINNING"), so a die that keeps turning into the tail is the goal and
@@ -2229,6 +2374,32 @@ export function createDiceStage(canvas, video) {
         // restating the profile's length as a literal.
         kicks: lastRoll?.kicks ?? null,
         bounceHeights: THROW.bounceHeights.length,
+        // Tilt of the presented face off level, degrees. 0 is flat.
+        cockedDeg: lastRoll?.cockedDeg ?? null,
+        // How many righting nudges this throw needed. 0 on a clean flat rest.
+        rightingNudges: lastRoll?.rightingNudges ?? null,
+        topFaceDeg: lastRoll?.topFaceDeg ?? null,
+        // The glyph's in-plane angle ON SCREEN at the current camera, degrees,
+        // signed, 0 = upright. This is what "off axis" actually looks like to
+        // a player, and it is measured rather than inferred: project the rest
+        // point and the same point pushed along the numeral's up direction,
+        // and take the angle of the resulting 2D vector from screen-up.
+        glyphDeg: (() => {
+          if (!die || !lastRoll?.landedQuat || lastRoll.index == null) return null;
+          const t = die.userData.faceUps[lastRoll.index];
+          if (!t) return null;
+          const up = rotateByQuat([t.x, t.y, t.z], lastRoll.landedQuat);
+          const base = die.position.clone();
+          const tip = base.clone().add(new THREE.Vector3(up[0], up[1], up[2]).multiplyScalar(0.6));
+          const a = base.project(camera);
+          const b = tip.project(camera);
+          const w = canvas.clientWidth || 1;
+          const h = canvas.clientHeight || 1;
+          // Screen pixels: x right, y DOWN. Screen-up is -y.
+          const dx = ((b.x - a.x) / 2) * w;
+          const dy = ((a.y - b.y) / 2) * h;
+          return +((Math.atan2(dx, dy) * 180) / Math.PI).toFixed(2);
+        })(),
         // Angular speed near rest. Evidence of spin, not a gate.
         tailSpin: lastRoll?.tailSpin ?? null,
         __hits: lastRoll?.__hits ?? null,

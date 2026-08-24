@@ -181,6 +181,73 @@ export const THROW = {
   // hops and the tail, and the centring is bought entirely with `linear`,
   // `firstBounceHold.carry` and the launch position instead.
   damping: { linear: 0.85, angular: 0.86 },
+  // Righting a cocked die. A die that sleeps leaning -- on an edge, or propped
+  // against the invisible wall -- presents its numeral off axis no matter what
+  // the camera does, because the reveal squares the glyph by projecting its
+  // in-face up onto the GROUND plane and that projection is only faithful
+  // while the resting face is level. Cam, 2026-08-23: "sometimes when the die
+  // is presented it's off axis a bit."
+  //
+  // `toleranceDeg` is bounded from below by measurement and from above by what
+  // a player can see. A die resting honestly flat scores 0.2-3 degrees on
+  // every solid in the set, so anything at or above ~5 clears natural rests.
+  // Cam's complaint was a d20 presenting "off axis a bit" at 15-20 degrees.
+  //
+  // It sits at 10 rather than 5 because righting is not free: every nudge is
+  // simulation time charged to the click budget, and gating at 5 fired on
+  // roughly twice as many rolls for tilts no one can see. 10 leaves natural
+  // rests untouched, catches everything in the range Cam noticed, and halves
+  // the cost. Cocked rests past 10 degrees ran about 1 roll in 5 before this
+  // existed -- 1 in 2 on the d12.
+  //
+  // It is deliberately NOT the tilt of the presented face -- see
+  // `bottomFaceTilt` in dice3d.js. A d10 sitting perfectly flat presents its
+  // numeral on a face tilted 20-31 degrees, because a trapezohedron's faces are
+  // not parallel to the ones opposite them, and gating that would have tried to
+  // right dice that were already flat.
+  //
+  // The attempt caps are hard and are the reason this cannot spin forever: past
+  // them the sim accepts the lean and reports it. Nudges cost simulation time
+  // and the click-to-number ceiling is real, so the impulse is small and the
+  // caps are low.
+  // Two budgets, deliberately separate. `early` nudges fire while the die is
+  // still settling and are cheap -- they blend into motion already there. But
+  // spent alone they get wasted on dice that were going to land flat anyway,
+  // and then the die finally stops leaning with nothing left to correct it:
+  // measured 1 roll in 10 resting cocked on three of the seven dice. So `rest`
+  // attempts are RESERVED for the real thing, a lean at a genuine stop, and
+  // cannot be consumed early.
+  righting: {
+    toleranceDeg: 10,
+    early: 2,
+    rest: 2,
+    // This is the expensive knob, and the cheap settings do not work. Whatever
+    // spin a nudge adds has to decay back under `rest.ang` (1.0 rad/s) before
+    // the sim will stop, and at `damping.angular` 0.86 that is ln(w)/1.97
+    // seconds -- so a strong nudge is paid for in simulation time charged
+    // straight to the click budget. The obvious move is to nudge gently.
+    // Measured, 10 rolls x 7 dice per setting:
+    //   spinMax 2.5 -- 12 cocked rests across 5 dice
+    //   spinMax 4.0 -- 13 cocked rests across 5 dice
+    //   spinMax 6.5 -- 0 cocked rests, 70/70
+    // A nudge too weak to tip the die is not "less effective", it is wasted:
+    // it pays the decay anyway, fails, and burns another attempt. So the
+    // strong setting is also not far off the cheap one in practice, and it is
+    // the only one that works.
+    // Empirical, and the intuitive models were both wrong. Spin has to decay
+    // back under `rest.ang` before the sim stops -- ln(omega)/1.97 s at
+    // `damping.angular` 0.86 -- so a gentle nudge looks cheaper; but measured
+    // over 10 rolls x 7 dice, spinMax 2.5 left 12 cocked rests and 4.0 left
+    // 13, because a nudge too weak to tip pays the decay, fails, and burns
+    // another attempt. Leading with `lift` instead (7 u/s, ten times the
+    // airtime) was worse still on both counts: the hop costs a whole fresh
+    // settle and rights no more reliably. 6.5 with a small lift is the only
+    // setting measured at 0 cocked rests in 70.
+    spin: 6,
+    spinMax: 6.5,
+    lift: 1.6,
+    wallPush: 1.5,
+  },
   sleep: { speedLimit: 0.7, timeLimit: 0.14 },
   // When the silent simulation stops recording, in units/s and rad/s. These
   // are "imperceptible", not "numerically zero", and the difference is most

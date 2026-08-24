@@ -121,6 +121,19 @@ composition. Two framing numbers are set here rather than in the physics:
   (21.1–23.7 %)**, over five rolls each. `e2e/roll.spec.js` holds it to a
   4 %-of-viewport floor, reading both rects at runtime.
 
+**The numeral reads upright, and that is geometry rather than tuning.** The die
+rests at whatever yaw physics left it, so the glyph would be rotated under an
+axis-aligned camera. `revealCamera` sets the camera's up vector to the
+ground-plane projection of the numeral's own in-face up direction
+(`faceUps`), which squares the glyph at any rest yaw without touching the die
+— invariant 3 is untouched, nothing is repositioned, and the camera is not
+rolled against the horizon, because that up vector lies in the ground plane
+and the reveal is a near-overhead shot. This was already true from sub-spec 1;
+`glyphDeg` in `debug()` now measures it, and the e2e asserts it in both
+orientations. It is a near-tautology by construction, and that is precisely
+why it is worth a test: pointing the camera at world-up to "avoid roll" would
+send every numeral crooked with nothing to catch it.
+
 ## 4. The throw — a profile in `physics-roll.js` (rewritten 2026-08-23, Task 5)
 
 All tunables live in one exported, pure profile so they can be unit-tested
@@ -258,6 +271,38 @@ die was presented floating four die-heights up. Measured at 2/40 rolls on d10
 and 4/40 on d20, and reachable only once `rest.ang` was raised to end the tail
 (0.006 rad/s cannot be hit mid-flight; 1.0 can). The soak and the e2e both
 bound the resting height against the die's own height now.
+
+### Righting a cocked die
+
+A die that sleeps leaning presents its numeral off axis whatever the camera
+does, because the squaring above projects onto the GROUND plane and that
+projection is only faithful while the resting face is level. Cam, 2026-08-23:
+*"sometimes when the die is presented it's off axis a bit."* `THROW.righting`
+fixes it in the silent simulation: while the die is settling, and again at a
+genuine stop, the sim measures the tilt of the face it is resting on and — if
+that is past `toleranceDeg` — spins it toward flat, lifts it slightly so it
+pivots instead of grinding, pushes it off the ring if a wall is propping the
+lean up, and keeps simulating. Two separate budgets, `early` and `rest`, cap
+it: the reserved `rest` attempts exist because early nudges alone got spent on
+dice that were going to land flat anyway, leaving nothing for the real lean.
+Past the caps the sim accepts the lean and reports it, which is why it cannot
+loop.
+
+**It gates on the RESTING face, not the presented one, and the difference is
+the whole design.** On a d6 or d20 the two are identical — their faces come in
+parallel pairs. On a d10 or d100 they are nothing alike: a pentagonal
+trapezohedron's kite faces are not parallel to the ones opposite, so a d10
+sitting perfectly flat still presents its numeral on a face tilted 20–31°
+(measured; the resting face on those same rolls was 1–9°). Gating the
+presented face would have declared every honest d10 rest cocked and tried to
+right a die that was already flat. `cockedDeg` is therefore resting-face tilt,
+which is shape-independent, and `topFaceDeg` is reported beside it as context.
+
+`toleranceDeg` is bounded below by measurement and above by what a player can
+see: honest flat rests score 0.2–3° on every solid, and Cam's complaint was
+15–20°. It sits at 10 because righting is not free — every nudge is simulation
+time charged to the click budget, and gating at 5 fired on roughly twice as
+many rolls for tilts nobody can see.
 
 ### `rest` is the lever that ends a throw
 

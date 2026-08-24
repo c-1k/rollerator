@@ -117,6 +117,13 @@ const BOUNDS = {
   // die-heights up. Expressed as a multiple of the die's own height, which
   // is the circumsphere diameter, so a resting centre is at most half of it.
   restHeightPerDieHeight: 1.0,
+  // The resting face must be flat on the floor. A die that sleeps leaning
+  // presents its numeral off axis whatever the camera does. THROW.righting
+  // holds the same tolerance and the sim nudges up to `attempts` times before
+  // accepting a lean, so this failing means righting ran out of tries.
+  // NOT the presented face's tilt -- a d10 rests flat with its numeral on a
+  // face tilted 20-31 degrees, which is the shape, not a fault.
+  cockedDeg: 10,
   restRadiusMedian: 1.2,
   restRadiusP95: 2.0,
 };
@@ -194,6 +201,9 @@ function fastBatch(n) {
       apex: d.apex,
       apexHeights: d.apexHeights,
       apex2Heights: d.apex2Heights,
+      cockedDeg: d.cockedDeg,
+      topFaceDeg: d.topFaceDeg,
+      rightingNudges: d.rightingNudges,
       tailSpin: d.tailSpin,
       dieHeight: d.dieHeight,
       kicks: d.kicks,
@@ -358,6 +368,11 @@ try {
     );
     const maxR = Math.max(...radii);
     const maxRestY = Math.max(...samples.map((s) => s.landedPos[1]));
+    const cocked = samples.map((s) => s.cockedDeg);
+    const maxCocked = Math.max(...cocked);
+    const overCocked = cocked.filter((c) => c > BOUNDS.cockedDeg).length;
+    const nudges = samples.map((s) => s.rightingNudges ?? 0);
+    const maxTop = Math.max(...samples.map((s) => s.topFaceDeg));
     const restYBound =
       BOUNDS.restHeightPerDieHeight * (samples[0]?.dieHeight ?? 1.64);
     const tailSpins = samples.map((s) => s.tailSpin);
@@ -433,6 +448,12 @@ try {
       );
     if (!FAST && row.heldMax > BOUNDS.heldFrames)
       fail(`heldFrames max ${row.heldMax} -- the replay stuttered`);
+    if (overCocked)
+      fail(
+        `${overCocked} of ${samples.length} rolls rested cocked past ` +
+          `${BOUNDS.cockedDeg} deg (max ${round(maxCocked)}) -- righting ran ` +
+          `out of attempts`,
+      );
     if (maxRestY > restYBound)
       fail(
         `a die came to rest ${round(maxRestY)} up, past ${round(restYBound)} ` +
@@ -483,6 +504,11 @@ try {
         `  min ${String(round(Math.min(...apex2s))).padStart(5)}` +
         `  max ${String(round(Math.max(...apex2s))).padStart(5)} die-heights` +
         `  in-band ${round(apex2Share * 100, 0)}%`,
+    );
+    console.log(
+      `       cocked    max ${round(maxCocked)} of ${BOUNDS.cockedDeg} deg` +
+        `   nudges ${nudges.reduce((a, b) => a + b, 0)} over ${nudges.length} rolls` +
+        `   (presented face max ${round(maxTop)} deg, shape not fault)`,
     );
     console.log(
       `       tail spin max ${round(tailSpinMax)} rad/s (reported, not bounded)`,
