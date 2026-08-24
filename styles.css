@@ -363,7 +363,11 @@ body {
 
 .rail-pick {
   display: grid;
-  grid-template-columns: 1.55fr 1fr;
+  /* [Environment] [Die skin] [Die]. Declared tracks, so a select's box does
+     not depend on which option is selected -- and minmax(0, ...) so a long
+     option cannot blow its track open and shove the others. Row 1 above is
+     untouched; the Roll button's anchoring contract lives there. */
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1.3fr) minmax(0, 0.55fr);
   gap: 0.55rem;
   align-items: end;
   padding-top: 0.68rem;
@@ -765,5 +769,20 @@ button:focus-visible {
 
   .hort-context {
     font-size: 0.8rem;
+  }
+}
+
+/* Under 380px three tracks are all too narrow to read. Environment -- the
+   longest label of the three -- takes a full-width row of its own above Skin
+   and Die. Two rows, no empty cells; the panel grows downward and row 1 does
+   not move. (DOM order is Environment, Skin, Die, so :first-child is the one
+   to promote.) */
+@media (max-width: 380px) {
+  .rail-pick {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .rail-pick .plaque:first-child {
+    grid-column: 1 / -1;
   }
 }

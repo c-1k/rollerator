@@ -28,7 +28,25 @@
       "!app.js",
       "!dice3d.js",
       "!index.html",
-      "!physics-roll*.js"
+      "!physics-roll*.js",
+
+      // ---------------------------------------------------------------
+      // die-skins.js is a hand-laid-out DATA table -- one field per line,
+      // so a value can be read against the die it describes -- and, like
+      // the files above, every byte of it is served straight from the repo
+      // root to the CDN with no build step in between.
+      //
+      // As written today it already matches the formatter's output byte
+      // for byte (checked, not assumed). It is held out because of what
+      // lands here NEXT: the per-skin wear profiles and the GLSL chunk
+      // builder, which are laid out for reading rather than for Biome.
+      //
+      // TO CLOSE: when the table stops growing, run the formatter over it
+      // as its own deliberate commit, look at the rendered dice, then
+      // delete this line. Its test file, die-skins.test.js, is a root
+      // *.test.js and is NOT excluded -- it is linted normally.
+      // ---------------------------------------------------------------
+      "!die-skins.js"
     ]
   },
   "formatter": {

@@ -6,6 +6,7 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import * as CANNON from "cannon-es";
+import { SKINS } from "./die-skins.js?v=faces512";
 import { createRollController } from "./roll-engine.js?v=faces512";
 import {
   CRANE_MS,
@@ -59,156 +60,124 @@ export const DICE = {
   d100: { sides: 100, min: 1 },
 };
 
-export const THEMES = {
+/**
+ * What the ROOM is: its lights, its post, and its plate.
+ *
+ * The die's own material lives in `SKINS` (`die-skins.js`) and is chosen
+ * separately, so a skin can be worn anywhere. `skin` here is only the
+ * environment's DEFAULT die -- what "Match environment" resolves to.
+ *
+ * `bloom`, `exposure`, `groundGlow` and `catcher` used to be switched on the
+ * theme's `style` inside `applyLights`, which was correct only while style
+ * and environment were the same thing. Keyed by environment they stay with
+ * the room, so wearing Obsidian Flow in the forest does not drag the
+ * caldera's post along with it.
+ */
+const ENVIRONMENTS = {
   siege: {
-    body: "#2a2218",
-    glow: "#e39a3a",
-    edge: "#c49a4a",
-    core: 0xe39a3a,
-    coreGain: 3.4,
-    ink: "#ffd27a",
-    inkHot: "#fff4d2",
-    metalness: 0.88,
-    roughness: 0.38,
-    transmission: 0,
-    ior: 1.5,
-    thickness: 0.5,
-    clearcoat: 0.18,
-    envMap: 0.42,
+    skin: "iron",
     ambient: 0x3a2a1c,
     key: 0xffd7a0,
     fill: 0x6a80a8,
     spot: 0xffb020,
-    style: "iron",
+    keyIntensity: 2.6,
+    envIntensity: 0.72,
+    exposure: 1.08,
+    bloom: { strength: 0.08, threshold: 0.55 },
+    groundGlow: 12,
+    catcher: 0.32,
   },
   bog: {
-    body: "#1a2418",
-    glow: "#7aa33a",
-    edge: "#4a6a32",
-    core: 0x6a8a28,
-    coreGain: 0.7,
-    ink: "#c6e38a",
-    inkHot: "#eaffc4",
-    metalness: 0.35,
-    roughness: 0.58,
-    transmission: 0,
-    ior: 1.5,
-    thickness: 1.5,
-    clearcoat: 0.14,
-    envMap: 0.32,
+    skin: "wet",
     ambient: 0x1c2a18,
     key: 0xa8c070,
     fill: 0x3a5048,
     spot: 0x88aa44,
-    style: "wet",
+    keyIntensity: 2.6,
+    envIntensity: 0.72,
+    exposure: 1.08,
+    bloom: { strength: 0.08, threshold: 0.55 },
+    groundGlow: 12,
+    catcher: 0.32,
   },
   forest: {
-    body: "#3a2a18",
-    glow: "#c48a3a",
-    edge: "#6a4a28",
-    core: 0xb47a28,
-    coreGain: 0.55,
-    ink: "#e2c07a",
-    inkHot: "#ffe9b0",
-    metalness: 0.18,
-    roughness: 0.68,
-    transmission: 0,
-    ior: 1.5,
-    thickness: 1.5,
-    clearcoat: 0.12,
-    envMap: 0.3,
+    skin: "bark",
     ambient: 0x2a2418,
     key: 0xe8d090,
     fill: 0x3a5040,
     spot: 0xc8a050,
-    style: "bark",
+    keyIntensity: 2.6,
+    envIntensity: 0.72,
+    exposure: 1.08,
+    bloom: { strength: 0.08, threshold: 0.55 },
+    groundGlow: 12,
+    catcher: 0.32,
   },
   cavern: {
-    body: "#2a2828",
-    glow: "#d4a056",
-    edge: "#8a7a68",
-    core: 0xd4a056,
-    coreGain: 0.65,
-    ink: "#e8c9a0",
-    inkHot: "#ffe8c8",
-    metalness: 0.12,
-    roughness: 0.58,
-    transmission: 0,
-    ior: 1.52,
-    thickness: 1.6,
-    clearcoat: 0.14,
-    envMap: 0.32,
+    skin: "stone",
     ambient: 0x221c18,
     key: 0xffd0a0,
     fill: 0x4a5868,
     spot: 0xffb060,
-    style: "stone",
+    keyIntensity: 2.6,
+    envIntensity: 0.72,
+    exposure: 1.08,
+    bloom: { strength: 0.08, threshold: 0.55 },
+    groundGlow: 12,
+    catcher: 0.32,
   },
   ice: {
-    body: "#d8eef8",
-    glow: "#9fd8ff",
-    edge: "#e8f6ff",
-    core: 0x9fd4ff,
-    coreGain: 4.6,
-    ink: "#163a58",
-    inkHot: "#082238",
-    metalness: 0.05,
-    roughness: 0.22,
-    transmission: 0.22,
-    ior: 1.31,
-    thickness: 1.1,
-    clearcoat: 0.35,
-    envMap: 0.3,
+    skin: "ice",
     ambient: 0x8ab0c8,
     key: 0xe8f4ff,
     fill: 0x6a90b8,
     spot: 0xb8e0ff,
-    style: "ice",
     filmPan: 0.3,
+    keyIntensity: 2.6,
+    envIntensity: 0.72,
+    exposure: 1.08,
+    bloom: { strength: 0.08, threshold: 0.55 },
+    groundGlow: 16,
+    catcher: 0.22,
   },
   volcano: {
-    body: "#140c0a",
-    glow: "#ff6a18",
-    edge: "#ff8a20",
-    core: 0xff3a00,
-    coreGain: 9,
-    ink: "#7a3a10",
-    inkHot: "#ffe7a8",
-    metalness: 0.12,
-    roughness: 0.82,
-    transmission: 0,
-    ior: 1.5,
-    thickness: 1.4,
-    clearcoat: 0.1,
-    envMap: 0.28,
+    skin: "lava",
     ambient: 0x3a1810,
     key: 0xffb070,
     fill: 0x402018,
     spot: 0xff5010,
-    style: "lava",
+    keyIntensity: 3.1,
+    envIntensity: 0.72,
+    exposure: 1.18,
+    bloom: { strength: 0.22, threshold: 0.38 },
+    groundGlow: 34,
+    catcher: 0.45,
   },
   hoard: {
-    body: "#5a3a10",
-    glow: "#ffd060",
-    edge: "#ffd78a",
-    core: 0xffc030,
-    coreGain: 4.2,
-    ink: "#fff0b8",
-    inkHot: "#ffffff",
-    metalness: 0.92,
-    roughness: 0.28,
-    transmission: 0,
-    ior: 1.52,
-    thickness: 1.6,
-    clearcoat: 0.18,
-    envMap: 0.38,
+    skin: "gold",
     ambient: 0x3a2a10,
     key: 0xffe8a8,
     fill: 0x805028,
     spot: 0xffd070,
-    style: "gold",
+    keyIntensity: 2.6,
+    envIntensity: 0.72,
+    exposure: 1.08,
+    bloom: { strength: 0.08, threshold: 0.55 },
+    groundGlow: 12,
+    catcher: 0.32,
   },
 };
+
+/**
+ * The old conflated table, kept as a composed VIEW so the documented export
+ * surface stays true and anything poking at `window` still finds it: each
+ * environment's fields laid over its default skin's. Nothing in the app
+ * reads it any more -- the stage resolves an environment and a skin
+ * separately -- and it is not a place to add anything.
+ */
+export const THEMES = Object.fromEntries(
+  Object.entries(ENVIRONMENTS).map(([name, env]) => [name, { ...SKINS[env.skin], ...env }])
+);
 
 export function formatFace(kind, n) {
   if (kind === "d100") return String(n).padStart(2, "0");
@@ -259,8 +228,8 @@ function canvasFrom(data, size) {
 
 const pbrCache = new Map();
 
-function bodyPBR(theme, size = TEX_BODY) {
-  const key = `relic-${theme.style}-${theme.body}-${size}`;
+function bodyPBR(skin, size = TEX_BODY) {
+  const key = `relic-${skin.id}-${skin.body}-${size}`;
   if (pbrCache.has(key)) return pbrCache.get(key);
 
   const albedo = new ImageData(size, size);
@@ -274,8 +243,8 @@ function bodyPBR(theme, size = TEX_BODY) {
   const R = roughness.data;
   const M = metal.data;
   const N = normal.data;
-  const style = theme.style;
-  const base = new THREE.Color(theme.body);
+  const style = skin.id;
+  const base = new THREE.Color(skin.body);
   const br = base.r * 255;
   const bgc = base.g * 255;
   const bb = base.b * 255;
@@ -509,7 +478,7 @@ function inkLuma(hex) {
   return c.r * 0.3 + c.g * 0.59 + c.b * 0.11;
 }
 
-function numberOverlay(label, hot, theme, maps) {
+function numberOverlay(label, hot, skin, maps) {
   const size = TEX_FACE;
   const cx = size / 2;
   const cy = size / 2;
@@ -544,9 +513,9 @@ function numberOverlay(label, hot, theme, maps) {
   for (let i = 0; i < glyph.length; i++) glyph[i] = maskPx[i * 4] / 255;
   const soft = blurGray(glyph, size, Math.max(1, Math.round(6 * k)));
 
-  const dirt = new THREE.Color(theme.ink);
-  const dirtHot = new THREE.Color(theme.inkHot);
-  const lightInk = inkLuma(hot ? theme.inkHot : theme.ink) > 0.45;
+  const dirt = new THREE.Color(skin.ink);
+  const dirtHot = new THREE.Color(skin.inkHot);
+  const lightInk = inkLuma(hot ? skin.inkHot : skin.ink) > 0.45;
   const rim = lightInk ? new THREE.Color("#1a120c") : new THREE.Color("#f4ead8");
   const albedo = document.createElement("canvas");
   albedo.width = albedo.height = size;
@@ -587,7 +556,7 @@ function numberOverlay(label, hot, theme, maps) {
   emissive.width = emissive.height = size;
   const e = emissive.getContext("2d");
   e.drawImage(maps.emissive, 0, 0, size, size);
-  e.fillStyle = hot ? theme.inkHot : theme.ink;
+  e.fillStyle = hot ? skin.inkHot : skin.ink;
   e.strokeStyle = e.fillStyle;
   e.font = font;
   e.textAlign = "center";
@@ -656,30 +625,30 @@ function numberOverlay(label, hot, theme, maps) {
   return { albedo, emissive, normal: nC, roughness: roughC };
 }
 
-function edgeLook(theme) {
-  if (theme.style === "ice") {
+function edgeLook(skin) {
+  if (skin.id === "ice") {
     return { round: 0.62, rim: new THREE.Color("#9bb8c8"), glow: 0.08, rough: 0.38, paint: 0.32, metal: 0.04 };
   }
-  if (theme.style === "lava") {
+  if (skin.id === "lava") {
     return { round: 0.58, rim: new THREE.Color("#2a1008"), glow: 0.55, rough: 0.88, paint: 0.42, metal: 0.08 };
   }
-  if (theme.style === "gold") {
+  if (skin.id === "gold") {
     return { round: 0.55, rim: new THREE.Color("#6a4a18"), glow: 0.06, rough: 0.55, paint: 0.38, metal: 0.35 };
   }
-  if (theme.style === "wet") {
+  if (skin.id === "wet") {
     return { round: 0.58, rim: new THREE.Color("#1a2a14"), glow: 0.04, rough: 0.62, paint: 0.36, metal: 0.05 };
   }
-  if (theme.style === "bark") {
+  if (skin.id === "bark") {
     return { round: 0.6, rim: new THREE.Color("#1a1008"), glow: 0.02, rough: 0.82, paint: 0.4, metal: 0.03 };
   }
-  if (theme.style === "stone") {
+  if (skin.id === "stone") {
     return { round: 0.57, rim: new THREE.Color("#5a4a3a"), glow: 0.03, rough: 0.78, paint: 0.34, metal: 0.04 };
   }
   return { round: 0.58, rim: new THREE.Color("#3a2a1c"), glow: 0.04, rough: 0.7, paint: 0.36, metal: 0.12 };
 }
 
-function weatherMaterial(mat, theme, seed = 0.37) {
-  const look = edgeLook(theme);
+function weatherMaterial(mat, skin, seed = 0.37) {
+  const look = edgeLook(skin);
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uRound = { value: look.round };
     shader.uniforms.uRimColor = { value: look.rim };
@@ -768,13 +737,13 @@ function weatherMaterial(mat, theme, seed = 0.37) {
         totalEmissiveRadiance *= 1.0 - corner * 0.5;`
       );
   };
-  mat.customProgramCacheKey = () => `weather-chips-${theme.style}`;
+  mat.customProgramCacheKey = () => `weather-chips-${skin.id}`;
   return mat;
 }
 
-function faceMaterial(label, hot, theme) {
-  const maps = bodyPBR(theme);
-  const overlay = numberOverlay(label, hot, theme, maps);
+function faceMaterial(label, hot, skin) {
+  const maps = bodyPBR(skin);
+  const overlay = numberOverlay(label, hot, skin, maps);
   const map = texFrom(overlay.albedo);
   const emissiveMap = texFrom(overlay.emissive);
   const normalMap = linTex(overlay.normal);
@@ -784,26 +753,26 @@ function faceMaterial(label, hot, theme) {
   emissiveMap.colorSpace = THREE.SRGBColorSpace;
   const mat = new THREE.MeshPhysicalMaterial({
     color: 0xffffff,
-    metalness: theme.metalness,
+    metalness: skin.metalness,
     metalnessMap,
-    roughness: theme.roughness,
+    roughness: skin.roughness,
     map,
     roughnessMap,
     normalMap,
     normalScale: new THREE.Vector2(0.7, 0.7),
-    emissive: new THREE.Color(theme.glow),
+    emissive: new THREE.Color(skin.glow),
     emissiveMap,
-    emissiveIntensity: hot ? 0.72 : theme.style === "lava" ? 0.45 : 0.04,
-    envMapIntensity: theme.envMap ?? 0.34,
-    clearcoat: theme.clearcoat ?? 0.16,
+    emissiveIntensity: hot ? 0.72 : skin.id === "lava" ? 0.45 : 0.04,
+    envMapIntensity: skin.envMap ?? 0.34,
+    clearcoat: skin.clearcoat ?? 0.16,
     clearcoatRoughness: 0.58,
     clearcoatNormalMap: normalMap,
     clearcoatNormalScale: new THREE.Vector2(0.35, 0.35),
-    transmission: theme.transmission ?? 0.08,
-    ior: theme.ior || 1.52,
-    thickness: theme.style === "ice" ? 1.8 : 1.15,
+    transmission: skin.transmission ?? 0.08,
+    ior: skin.ior || 1.52,
+    thickness: skin.id === "ice" ? 1.8 : 1.15,
     iridescence: 0,
-    attenuationColor: new THREE.Color("#cfc6b4").lerp(new THREE.Color(theme.body), 0.25),
+    attenuationColor: new THREE.Color("#cfc6b4").lerp(new THREE.Color(skin.body), 0.25),
     attenuationDistance: 0.48,
   });
   let h = 2166136261;
@@ -811,7 +780,7 @@ function faceMaterial(label, hot, theme) {
     h ^= label.charCodeAt(i);
     h = Math.imul(h, 16777619);
   }
-  return weatherMaterial(mat, theme, (h >>> 0) / 4294967296);
+  return weatherMaterial(mat, skin, (h >>> 0) / 4294967296);
 }
 
 function faceTangentBasis(normal) {
@@ -881,6 +850,26 @@ function plump(geo, amount) {
   pos.needsUpdate = true;
 }
 
+/**
+ * FNV-1a over the raw bytes of a geometry's position buffer.
+ *
+ * This is the frozen-hull gate's instrument. It is taken at mesh build,
+ * AFTER `plump` has run, so it needs no roll -- unlike `debug().dieHeight`,
+ * which is read off the last roll and is null until one completes. Bytes
+ * rather than rounded numbers, so a vertex that moves by a float's last bit
+ * still shows up.
+ */
+function hashPositions(geo) {
+  const a = geo.attributes.position.array;
+  const bytes = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+  let h = 2166136261;
+  for (let i = 0; i < bytes.length; i++) {
+    h ^= bytes[i];
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
 function trapezohedron() {
   const a = new THREE.ConeGeometry(1, 1.18, 5, 1, true);
   const b = new THREE.ConeGeometry(1, 1.18, 5, 1, true);
@@ -894,7 +883,7 @@ function trapezohedron() {
   return merged;
 }
 
-function prepareFaces(kind, theme) {
+function prepareFaces(kind, skin) {
   const spec = DICE[kind];
   let geo;
   if (kind === "d6") geo = new THREE.BoxGeometry(1.22, 1.22, 1.22);
@@ -944,10 +933,13 @@ function prepareFaces(kind, theme) {
     const { texUp, texRight } = faceUvBasis(kind, a, b, c, normals[f]);
     projectFaceUVs(geo, start, count, texUp, texRight);
     faceUps.push(texUp);
-    materials.push(faceMaterial(formatFace(kind, values[f]), false, theme));
+    materials.push(faceMaterial(formatFace(kind, values[f]), false, skin));
   }
 
-  plump(geo, theme.style === "ice" ? 0.46 : theme.style === "lava" ? 0.34 : 0.36);
+  // FROZEN, and carried across verbatim from the old style ladder -- see the
+  // note on `plump` in die-skins.js. It feeds the cannon hull and dieHeight,
+  // so it is not a design knob.
+  plump(geo, skin.plump);
   const pos2 = geo.attributes.position;
   for (let f = 0; f < faceCount; f++) {
     const start = starts[f].start;
@@ -963,13 +955,13 @@ function prepareFaces(kind, theme) {
   return { geo, materials, normals, faceUps, values };
 }
 
-function makeDieMesh(kind, theme) {
-  const { geo, materials, normals, faceUps, values } = prepareFaces(kind, theme);
+function makeDieMesh(kind, skin) {
+  const { geo, materials, normals, faceUps, values } = prepareFaces(kind, skin);
   const mesh = new THREE.Mesh(geo, materials);
   mesh.castShadow = true;
-  const core = new THREE.PointLight(theme.core, theme.style === "lava" ? theme.coreGain : 0, 6, 2);
+  const core = new THREE.PointLight(skin.core, skin.id === "lava" ? skin.coreGain : 0, 6, 2);
   mesh.add(core);
-  if (theme.style === "lava") {
+  if (skin.id === "lava") {
     const magma = new THREE.Mesh(
       new THREE.SphereGeometry(0.42, 24, 16),
       new THREE.MeshBasicMaterial({ color: 0xff2a00 })
@@ -1001,7 +993,6 @@ export function createDiceStage(canvas, video) {
   const scene = new THREE.Scene();
   const pmrem = new THREE.PMREMGenerator(renderer);
   scene.environment = pmrem.fromScene(new RoomEnvironment(), 0).texture;
-  scene.environmentIntensity = 0.82;
 
   const IDLE_FOV = 44;
   const DROP_FOV = 54;
@@ -1175,6 +1166,14 @@ export function createDiceStage(canvas, video) {
   let dieHeight = 1.64;
   let kind = "d20";
   let envName = "siege";
+  // "auto" follows the environment's default die; anything else is a skin id
+  // the player picked, and it sticks across environment changes.
+  let skinName = "auto";
+  // FNV-1a over the built geometry's position buffer, refreshed every
+  // rebuild. The frozen-hull gate reads this through debug().geom: `plump`
+  // has already run by the time a mesh exists, so it needs no roll -- which
+  // matters, because debug().dieHeight is null until one completes.
+  let positionHash = "00000000";
   let rolling = false;
   let heatedIndex = -1;
   let settleRoll = null;
@@ -1199,26 +1198,41 @@ export function createDiceStage(canvas, video) {
   let fovFrom = IDLE_FOV;
   let fovTo = IDLE_FOV;
 
+  /**
+   * The composed view, kept alive for `swapFace` alone -- it is the one
+   * caller left, it has no call sites of its own, and both go together.
+   * Everything else asks for the room or the die by name.
+   */
   function theme() {
     return THEMES[envName] || THEMES.siege;
   }
 
-  function applyLights(t) {
-    ambient.color.set(t.ambient);
-    key.color.set(t.key);
-    fill.color.set(t.fill);
-    groundGlow.color.set(t.spot);
-    groundGlow.intensity = t.style === "lava" ? 34 : t.style === "ice" ? 16 : 12;
-    bloom.strength = t.style === "lava" ? 0.22 : 0.08;
-    bloom.threshold = t.style === "lava" ? 0.38 : 0.55;
-    renderer.toneMappingExposure = t.style === "lava" ? 1.18 : 1.08;
-    catcher.material.opacity = t.style === "ice" ? 0.22 : t.style === "lava" ? 0.45 : 0.32;
-    key.intensity = t.style === "lava" ? 3.1 : 2.6;
-    scene.environmentIntensity = 0.72;
+  function environment() {
+    return ENVIRONMENTS[envName] || ENVIRONMENTS.siege;
+  }
+
+  function activeSkin() {
+    return SKINS[skinName === "auto" ? environment().skin : skinName] || SKINS.iron;
+  }
+
+  function applyLights(env) {
+    ambient.color.set(env.ambient);
+    key.color.set(env.key);
+    fill.color.set(env.fill);
+    groundGlow.color.set(env.spot);
+    groundGlow.intensity = env.groundGlow;
+    bloom.strength = env.bloom.strength;
+    bloom.threshold = env.bloom.threshold;
+    renderer.toneMappingExposure = env.exposure;
+    catcher.material.opacity = env.catcher;
+    key.intensity = env.keyIntensity;
+    // The only writer. It used to be set at construction too, to a different
+    // number that this one immediately overwrote.
+    scene.environmentIntensity = env.envIntensity;
   }
 
   function fitBackground() {
-    const pan = theme().filmPan || 0;
+    const pan = environment().filmPan || 0;
     video.style.objectPosition = pan ? `${Math.round(50 - pan * 80)}% 50%` : "50% 50%";
   }
 
@@ -1430,9 +1444,9 @@ export function createDiceStage(canvas, video) {
     abortRoll();
     heatedIndex = -1;
     disposeDie();
-    const t = theme();
-    applyLights(t);
-    die = makeDieMesh(kind, t);
+    applyLights(environment());
+    die = makeDieMesh(kind, activeSkin());
+    positionHash = hashPositions(die.geometry);
     die.scale.setScalar(DIE_SCALE);
     scene.add(die);
     makeDieBody(die);
@@ -1443,11 +1457,13 @@ export function createDiceStage(canvas, video) {
     fitBackground();
   }
 
-  function setKind(next, nextEnv) {
+  function setKind(next, nextEnv, nextSkin) {
     const env = nextEnv || envName;
-    if (die && next === kind && env === envName) return;
+    const skin = nextSkin || skinName;
+    if (die && next === kind && env === envName && skin === skinName) return;
     kind = next;
     envName = env;
+    skinName = skin;
     rebuild();
   }
 
@@ -1472,8 +1488,7 @@ export function createDiceStage(canvas, video) {
   function setFaceFocus(mesh, keepIndex, u) {
     if (!mesh?.material) return;
     const mats = mesh.material;
-    const t = theme();
-    const winGlow = t.style === "lava" ? 0.7 : 0.62;
+    const winGlow = activeSkin().id === "lava" ? 0.7 : 0.62;
     for (let i = 0; i < mats.length; i++) {
       const mat = mats[i];
       if (i === keepIndex) {
@@ -1497,8 +1512,7 @@ export function createDiceStage(canvas, video) {
       heatedIndex = -1;
       return;
     }
-    const t = theme();
-    const base = t.style === "lava" ? 0.45 : 0.04;
+    const base = activeSkin().id === "lava" ? 0.45 : 0.04;
     for (const mat of target.material) {
       mat.color.setRGB(1, 1, 1);
       mat.emissiveIntensity = base;
@@ -2355,8 +2369,8 @@ export function createDiceStage(canvas, video) {
     const dt = Math.min(0.05, (now - lastTick) / 1000);
     lastTick = now;
     if (rollState) stepRoll(dt, now);
-    if (die && theme().style === "lava") {
-      die.userData.core.intensity = theme().coreGain * (0.88 + Math.sin(now * 0.007) * 0.18);
+    if (die && activeSkin().id === "lava") {
+      die.userData.core.intensity = activeSkin().coreGain * (0.88 + Math.sin(now * 0.007) * 0.18);
     }
     renderer.setClearColor(0x000000, 0);
     composer.render();
@@ -2384,6 +2398,10 @@ export function createDiceStage(canvas, video) {
     debug() {
       return {
         phase: rollState?.phase || (rolling ? "rolling" : "idle"),
+        // What the die is actually made of, and what the player asked for.
+        // They differ whenever the choice is "auto".
+        skin: activeSkin().id,
+        skinChoice: skinName,
         y: die ? +die.position.y.toFixed(3) : null,
         value: lastRoll?.value ?? null,
         landedIndex: lastRoll?.index ?? -1,
@@ -2409,6 +2427,12 @@ export function createDiceStage(canvas, video) {
         apex2: lastRoll?.apex2 ?? null,
         apex2Heights: lastRoll?.apex2Heights ?? null,
         dieHeight: lastRoll?.dieHeight ?? null,
+        // The geometry as built, available before any roll -- which is the
+        // whole point, since `dieHeight` above reads null until one lands.
+        // `positionHash` is the gate a hull-freezing task runs on;
+        // `dieHeightRaw` is the same quantity as `dieHeight` unrounded, and
+        // is reported as context rather than gated.
+        geom: { dieHeightRaw: dieHeight, positionHash },
         // How many authored rebounds fired, and how many were asked for. The
         // two must match on every roll; the soak reads both rather than
         // restating the profile's length as a literal.

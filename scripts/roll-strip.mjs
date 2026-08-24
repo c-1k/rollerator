@@ -11,6 +11,7 @@
  *
  *   node scripts/roll-strip.mjs            # d20 in the siege
  *   node scripts/roll-strip.mjs d20 ice
+ *   node scripts/roll-strip.mjs d20 ice --skin gold
  *
  * Writes into .artifacts/:
  *   roll-strip-<die>-<env>.png        the contact sheet (4 x 2, left to right)
@@ -62,7 +63,24 @@ const COLS = 4;
 const VIEWPORT = { width: 900, height: 640 };
 /** Below this many distinct capture moments the sheet is not of a flight. */
 const MIN_DISTINCT = 5;
-const positional = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+const SKINS = ["auto", "iron", "wet", "bark", "stone", "ice", "lava", "gold"];
+
+/**
+ * `--skin <id>` (or `--skin=<id>`) picks the die's material independently of
+ * the environment; without it the die is whatever the environment wears, and
+ * both the behaviour and the output filename are exactly as they were.
+ */
+const argv = process.argv.slice(2);
+const positional = [];
+const flags = new Set();
+let skin = null;
+for (let i = 0; i < argv.length; i++) {
+  const arg = argv[i];
+  if (arg === "--skin") skin = argv[++i] ?? "";
+  else if (arg.startsWith("--skin=")) skin = arg.slice("--skin=".length);
+  else if (arg.startsWith("--")) flags.add(arg);
+  else positional.push(arg);
+}
 const die = positional[0] ?? "d20";
 const env = positional[1] ?? "siege";
 const PORT = Number(process.env.PORT ?? 4321);
@@ -77,6 +95,13 @@ if (!ENVIRONMENTS.includes(env)) {
   );
   process.exit(1);
 }
+if (skin !== null && !SKINS.includes(skin)) {
+  console.error(`Unknown skin "${skin}". Expected one of: ${SKINS.join(", ")}`);
+  process.exit(1);
+}
+
+/** Suffixes every output so a skin sheet never clobbers the `auto` one. */
+const TAG = skin ? `-${skin}` : "";
 
 /** Start the static server unless one is already answering on PORT. */
 async function ensureServer() {
@@ -172,6 +197,21 @@ try {
   await page.locator("#roll").waitFor({ state: "visible" });
   await page.selectOption("#environment", env);
   await page.selectOption("#die", die);
+  if (skin !== null) {
+    await page.selectOption("#skin", skin);
+    // Wait for the rebuild rather than a fixed sleep: the stage reports the
+    // skin it actually built with, and "auto" resolves to the environment's
+    // own default, so the choice is what is checked in that one case.
+    await page.waitForFunction(
+      (id) => {
+        const d = window.__dice?.debug();
+        if (!d) return false;
+        return id === "auto" ? d.skinChoice === "auto" : d.skin === id;
+      },
+      skin,
+      { timeout: 60_000 },
+    );
+  }
   await page.waitForTimeout(3000);
   // A throwaway roll first. The first throw of a session pays for shader
   // compilation on the heat/focus material swap, which stalls the renderer
@@ -286,13 +326,13 @@ try {
 
   const paths = [];
   for (const s of shots) {
-    const p = resolve(OUT_DIR, `roll-strip-${die}-${env}-${s.k}.png`);
+    const p = resolve(OUT_DIR, `roll-strip-${die}-${env}${TAG}-${s.k}.png`);
     await writeFile(p, s.buf);
     paths.push(p);
   }
-  const restPath = resolve(OUT_DIR, `roll-strip-${die}-${env}-rest.png`);
+  const restPath = resolve(OUT_DIR, `roll-strip-${die}-${env}${TAG}-rest.png`);
   await writeFile(restPath, restShot);
-  const widePath = resolve(OUT_DIR, `roll-strip-${die}-${env}-wide.png`);
+  const widePath = resolve(OUT_DIR, `roll-strip-${die}-${env}${TAG}-wide.png`);
   await writeFile(widePath, wideShot);
 
   const sheetPage = await browser.newPage({
@@ -304,12 +344,13 @@ try {
     cell: captured.crop.side,
     cols: COLS,
   });
-  const sheetPath = resolve(OUT_DIR, `roll-strip-${die}-${env}.png`);
+  const sheetPath = resolve(OUT_DIR, `roll-strip-${die}-${env}${TAG}.png`);
   await writeFile(sheetPath, Buffer.from(dataUrl.split(",")[1], "base64"));
   await sheetPage.close();
 
   console.log(
-    `\n  ${die} in ${env}: ${started.flightMs} ms flight, ` +
+    `\n  ${die}${skin ? ` (${skin})` : ""} in ${env}: ` +
+      `${started.flightMs} ms flight, ` +
       `${started.bounces} bounces, ${started.wallHits} wall hits` +
       ` -> ${landed.value}`,
   );
