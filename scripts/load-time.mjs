@@ -8,6 +8,21 @@
  * in-page, using the browser's own `performance.now()`, for the moment
  * `window.__dice.debug().meshQuat` actually goes non-null.
  *
+ * `loadMs` and `readyMs` read the same today, BY CONSTRUCTION, not
+ * coincidence: `app.js` builds the whole stage synchronously -- it calls
+ * `createDiceStage()` at module top level, then an unconditional `setIdle()`
+ * a few lines later that clears `#roll`'s `disabled` -- with no `await`,
+ * `requestAnimationFrame`, or `setTimeout` anywhere on that path (dice3d.js
+ * has none before its render/roll loop, which only runs after a click).
+ * So both in-page polls below resolve on their very first check, in the
+ * same synchronous tick, and `readyMs` carries no signal independent of
+ * `loadMs` TODAY. It earns its keep the moment that path goes async --
+ * deferred texture generation, a chunked material bake, an awaited font or
+ * asset load, the kind of thing future deferral work would add -- at which
+ * point `readyMs` becomes the number that answers "can the user actually
+ * act" and `loadMs` becomes the shallower one. Keep measuring both for that
+ * reason, not because they currently disagree.
+ *
  *   node scripts/load-time.mjs                    # localhost:$PORT (4321)
  *   PORT=4390 node scripts/load-time.mjs           # localhost:4390
  *   node scripts/load-time.mjs https://rollerator.com
@@ -15,6 +30,19 @@
  * Prints one line of JSON -- `{ loadMs, readyMs, rollMs, reloadMs }` -- and
  * a human-readable summary line. Exits 0 on success, 1 if the die never
  * appears (or any other measured stage never completes) within 60 s.
+ *
+ * Reading the numbers: there is no prior same-method baseline. The "9.2s"
+ * cold-load figure in `playwright.config.js`'s comment was measured by a
+ * different (manual) method, not this tool, so a delta against it is not a
+ * regression signal -- this script's own output, run over run, is the only
+ * valid comparison series. Expect real cold-run variance beyond whatever
+ * system load explains: every run launches a fresh, cache-empty browser
+ * context, and three.js/cannon-es load from jsdelivr on every one of them
+ * (see the importmap in index.html) -- CDN fetch + parse is a real,
+ * non-CPU fraction of a cold `loadMs`. That's consistent with the ~4.4 s
+ * this tool typically measures between a cold `loadMs` and a warm
+ * `reloadMs`: some of that gap is texture rebake, but the CDN round trip
+ * only the cold run pays for is in there too.
  */
 import { chromium } from "@playwright/test";
 
@@ -118,6 +146,8 @@ try {
   });
 
   await page.goto(origin);
+  // See the header: readyMs == loadMs today by construction (the load path
+  // is fully synchronous), not because this measurement is redundant.
   const [loadMs, readyMs] = await Promise.all([
     stampWhen(page, "die", TIMEOUT_MS),
     stampWhen(page, "ready", TIMEOUT_MS),
