@@ -1,0 +1,1092 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import {
+  ANG_SLEEP,
+  FACE_UV_YAW,
+  edgeAlignedUp,
+  FLIGHT_MAX_MS,
+  GRAVITY_Y,
+  LIN_SLEEP,
+  THROW,
+  adjacentFaces,
+  arenaPlanes,
+  assignPolyhedronValues,
+  faceValueTable,
+  icosahedronFaceNormals,
+  interpolateFrame,
+  isSleepy,
+  landedValue,
+  pairOppositeFaces,
+  quatSlerp,
+  dampedRise,
+  reboundSpeed,
+  riseVelocityAt,
+  restOffsetY,
+  revealCamera,
+  rotateAround,
+  rotateByQuat,
+  snapProgress,
+  smoothProgress,
+  snapQuaternion,
+  polygonIncentre,
+  swapValueFaces,
+  throwPose,
+  triangleMedianUp,
+  uniquePolygon,
+  uniqueVertsAndFaces,
+  upwardFaceIndex,
+} from "./physics-roll.js";
+
+function almost(a, b, eps = 1e-5) {
+  assert.ok(Math.abs(a - b) < eps, `${a} ≉ ${b}`);
+}
+
+function vecAlmost(a, b, eps = 1e-4) {
+  assert.equal(a.length, b.length);
+  for (let i = 0; i < a.length; i++) almost(a[i], b[i], eps);
+}
+
+describe("upwardFaceIndex", () => {
+  const box = [
+    [1, 0, 0],
+    [-1, 0, 0],
+    [0, 1, 0],
+    [0, -1, 0],
+    [0, 0, 1],
+    [0, 0, -1],
+  ];
+
+  it("picks the +Y face at identity", () => {
+    assert.equal(upwardFaceIndex(box, [0, 0, 0, 1]), 2);
+  });
+
+  it("picks the face whose local normal maps onto world up after a snap", () => {
+    const plusZ = 4;
+    const q = snapQuaternion(box[plusZ], [0, 1, 0]);
+    assert.equal(upwardFaceIndex(box, q), plusZ);
+    const world = rotateByQuat(box[plusZ], q);
+    vecAlmost(world, [0, 1, 0], 1e-4);
+  });
+});
+
+describe("snapQuaternion", () => {
+  it("maps the local face normal onto +Y", () => {
+    const q = snapQuaternion([0, 0, 1], [0, 1, 0]);
+    vecAlmost(rotateByQuat([0, 0, 1], q), [0, 1, 0]);
+  });
+
+  it("twists so the face tex-up points toward -Z for a camera on +Z", () => {
+    const q = snapQuaternion([0, 1, 0], [0, 0, 1]);
+    const tex = rotateByQuat([0, 0, 1], q);
+    assert.ok(tex[2] < -0.9, `tex-up should face -Z, got ${tex}`);
+  });
+});
+
+describe("restOffsetY", () => {
+  it("lifts a unit cube so the lowest vertex sits on y=0", () => {
+    const verts = [];
+    for (const x of [-0.5, 0.5]) {
+      for (const y of [-0.5, 0.5]) {
+        for (const z of [-0.5, 0.5]) verts.push([x, y, z]);
+      }
+    }
+    almost(restOffsetY(verts, [0, 0, 0, 1], 1), 0.5);
+    almost(restOffsetY(verts, [0, 0, 0, 1], 0.62), 0.31);
+  });
+});
+
+describe("uniqueVertsAndFaces", () => {
+  it("welds shared vertices across two triangles", () => {
+    const pos = new Float32Array([
+      0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1,
+    ]);
+    const { vertices, faces } = uniqueVertsAndFaces(pos);
+    assert.equal(vertices.length, 4);
+    assert.equal(faces.length, 2);
+    assert.equal(faces[0].length, 3);
+    assert.equal(new Set(faces.flat()).size, 4);
+  });
+});
+
+describe("throwPose", () => {
+  it("throws from hand height with downward speed, into the arena, and with spin", () => {
+    let i = 0;
+    const seq = [0.2, 0.8, 0.3, 0.4, 0.6, 0.1, 0.9, 0.25, 0.75, 0.5, 0.5, 0.5];
+    const rng = () => seq[i++ % seq.length];
+    const pose = throwPose(rng);
+    assert.ok(pose.position[1] < 3, `start y ${pose.position[1]}`);
+    assert.ok(pose.velocity[1] < 0, `vy should fall, got ${pose.velocity[1]}`);
+    assert.ok(pose.velocity[2] < 0, `vz should be toward -Z, got ${pose.velocity[2]}`);
+    assert.ok(pose.velocity[1] < -40, `the slam drives the die down, got ${pose.velocity[1]}`);
+    assert.equal(pose.angularVelocity.length, 3);
+    assert.ok(pose.angularVelocity.some((v) => Math.abs(v) > 1));
+  });
+});
+
+describe("landedValue", () => {
+  const box = [
+    [1, 0, 0],
+    [-1, 0, 0],
+    [0, 1, 0],
+    [0, -1, 0],
+    [0, 0, 1],
+    [0, 0, -1],
+  ];
+
+  it("returns the face whose normal maps onto world up", () => {
+    const values = [2, 5, 1, 6, 3, 4];
+    assert.equal(landedValue(box, [0, 0, 0, 1], values), 1);
+    const q = snapQuaternion(box[4], [0, 1, 0]);
+    assert.equal(landedValue(box, q, values), 3);
+  });
+
+  it("reads the live d6 table as 3 at identity (+Y)", () => {
+    assert.equal(landedValue(box, [0, 0, 0, 1], [2, 5, 3, 4, 1, 6]), 3);
+  });
+
+  it("reads whatever face is world-up at the given quaternion, not a pre-roll constant", () => {
+    const values = [2, 5, 3, 4, 1, 6];
+    const identity = landedValue(box, [0, 0, 0, 1], values);
+    const q = snapQuaternion(box[4], [0, 1, 0]);
+    const other = landedValue(box, q, values);
+    assert.equal(identity, 3);
+    assert.equal(other, 1);
+    assert.notEqual(identity, other);
+  });
+});
+
+describe("pairOppositeFaces", () => {
+  it("pairs box faces whose normals are opposite", () => {
+    const box = [
+      [1, 0, 0],
+      [-1, 0, 0],
+      [0, 1, 0],
+      [0, -1, 0],
+      [0, 0, 1],
+      [0, 0, -1],
+    ];
+    const opp = pairOppositeFaces(box);
+    assert.equal(opp[0], 1);
+    assert.equal(opp[1], 0);
+    assert.equal(opp[2], 3);
+    assert.equal(opp[4], 5);
+  });
+
+  it("pairs icosahedron faces with nearly opposite normals", () => {
+    const { normals } = icosahedronFaceNormals();
+    const opp = pairOppositeFaces(normals);
+    assert.equal(opp.length, 20);
+    for (let i = 0; i < 20; i++) {
+      assert.ok(opp[i] >= 0 && opp[i] !== i);
+      assert.equal(opp[opp[i]], i);
+      const d = normals[i][0] * normals[opp[i]][0] + normals[i][1] * normals[opp[i]][1] + normals[i][2] * normals[opp[i]][2];
+      assert.ok(d < -0.98, `opposite dot ${d} for face ${i}`);
+    }
+  });
+});
+
+describe("assignPolyhedronValues", () => {
+  it("puts 20 on the +Y-most icosahedron face with 1 opposite and pairs summing to 21", () => {
+    const { normals } = icosahedronFaceNormals();
+    const values = assignPolyhedronValues(normals, 20);
+    const pole = upwardFaceIndex(normals, [0, 0, 0, 1], [0, 1, 0]);
+    const opp = pairOppositeFaces(normals);
+    assert.equal(values[pole], 20);
+    assert.equal(values[opp[pole]], 1);
+    assert.equal(new Set(values).size, 20);
+    for (let i = 0; i < 20; i++) {
+      assert.equal(values[i] + values[opp[i]], 21);
+    }
+  });
+
+  it("places Bruno-net 11 and 14 next to 20 (7 sits opposite 14, with 1)", () => {
+    const { normals } = icosahedronFaceNormals();
+    const values = assignPolyhedronValues(normals, 20);
+    const pole = values.indexOf(20);
+    const ring = new Set(adjacentFaces(normals, pole, 3).map((i) => values[i]));
+    assert.equal(ring.has(14), true);
+    assert.equal(ring.has(11), true);
+    assert.equal(ring.has(1), false);
+    assert.equal(ring.has(7), false);
+    const i14 = values.indexOf(14);
+    const opp = pairOppositeFaces(normals);
+    assert.equal(values[opp[i14]], 7);
+  });
+
+  it("does not number d20 faces sequentially as f+1", () => {
+    const { normals } = icosahedronFaceNormals();
+    const values = faceValueTable("d20", normals);
+    assert.notDeepEqual(
+      values,
+      Array.from({ length: 20 }, (_, f) => f + 1)
+    );
+    const opp = pairOppositeFaces(normals);
+    for (let i = 0; i < 20; i++) assert.equal(values[i] + values[opp[i]], 21);
+  });
+
+  it("keeps the d6 BoxGeometry table with opposites of 7", () => {
+    const box = [
+      [1, 0, 0],
+      [-1, 0, 0],
+      [0, 1, 0],
+      [0, -1, 0],
+      [0, 0, 1],
+      [0, 0, -1],
+    ];
+    const values = faceValueTable("d6", box);
+    assert.deepEqual(values, [2, 5, 3, 4, 1, 6]);
+    assert.equal(values[0] + values[1], 7);
+    assert.equal(values[2] + values[3], 7);
+    assert.equal(values[4] + values[5], 7);
+  });
+});
+
+describe("swapValueFaces", () => {
+  it("swaps the landed slot with the forced face so world-up reads as force", () => {
+    const box = [
+      [1, 0, 0],
+      [-1, 0, 0],
+      [0, 1, 0],
+      [0, -1, 0],
+      [0, 0, 1],
+      [0, 0, -1],
+    ];
+    const values = [2, 5, 3, 4, 1, 6];
+    assert.equal(landedValue(box, [0, 0, 0, 1], values), 3);
+    const next = swapValueFaces(values, 2, 6);
+    assert.equal(values[2], 3);
+    assert.equal(next[2], 6);
+    assert.equal(next[5], 3);
+    assert.equal(landedValue(box, [0, 0, 0, 1], next), 6);
+  });
+
+  it("is a no-op when the rest pose already shows the forced value", () => {
+    const values = [2, 5, 3, 4, 1, 6];
+    const next = swapValueFaces(values, 2, 3);
+    assert.deepEqual(next, values);
+  });
+
+  it("forces 7 onto the +Y d20 face by swapping values", () => {
+    const { normals } = icosahedronFaceNormals();
+    const values = assignPolyhedronValues(normals, 20);
+    const pole = upwardFaceIndex(normals, [0, 0, 0, 1]);
+    assert.equal(values[pole], 20);
+    const next = swapValueFaces(values, pole, 7);
+    assert.equal(landedValue(normals, [0, 0, 0, 1], next), 7);
+    assert.equal(next[values.indexOf(7)], 20);
+  });
+});
+
+describe("triangleMedianUp", () => {
+  it("points toward the highest vertex in the face plane", () => {
+    const up = triangleMedianUp([0, 0, 0], [1, 0, 0], [0.5, 0.8, 0], [0, 1, 0]);
+    assert.ok(up[1] > 0.9, `tex-up should aim at the top vertex, got ${up}`);
+    almost(up[2], 0);
+  });
+});
+
+describe("FACE_UV_YAW", () => {
+  it("uses a DiceFactory-style d20 twist of about -7.5 degrees", () => {
+    almost(FACE_UV_YAW.d20, (-7.5 * Math.PI) / 180, 1e-8);
+    const spun = rotateAround([0, 1, 0], [0, 0, 1], FACE_UV_YAW.d20);
+    assert.ok(spun[0] > 0, "yaw around +Z sends +Y toward +X");
+    assert.ok(spun[1] > 0.98);
+  });
+});
+
+describe("isSleepy", () => {
+  // Thresholds are passed explicitly. They used to be left to default to
+  // THROW.rest, which quietly made this a test of the PROFILE: every attempt
+  // to tune the settle thresholds broke it, so the tuning task could not move
+  // the one value that decides when a throw ends. What belongs here is the
+  // behaviour of the function -- both speeds under their own threshold.
+  it("is true only when both speeds are under their own threshold", () => {
+    const lin = 0.3;
+    const ang = 0.9;
+    assert.equal(isSleepy([0, 0, 0], [0, 0, 0], lin, ang), true);
+    assert.equal(isSleepy([0.2, 0, 0], [0, 0.5, 0], lin, ang), true);
+    assert.equal(isSleepy([0.4, 0, 0], [0, 0.5, 0], lin, ang), false);
+    assert.equal(isSleepy([0.2, 0, 0], [0, 1.0, 0], lin, ang), false);
+    // It is the magnitude that counts, not any one component.
+    assert.equal(isSleepy([0.2, 0.2, 0.2], [0, 0, 0], lin, ang), false);
+  });
+
+  it("defaults to the profile's own settle thresholds", () => {
+    const under = THROW.rest.lin * 0.5;
+    const over = THROW.rest.lin * 2;
+    assert.equal(isSleepy([under, 0, 0], [0, THROW.rest.ang * 0.5, 0]), true);
+    assert.equal(isSleepy([over, 0, 0], [0, THROW.rest.ang * 0.5, 0]), false);
+  });
+});
+
+describe("snapProgress", () => {
+  it("is 0 at t=0, 1 at duration, and eases out", () => {
+    almost(snapProgress(0, 300), 0);
+    almost(snapProgress(300, 300), 1);
+    almost(snapProgress(400, 300), 1);
+    const mid = snapProgress(150, 300);
+    assert.ok(mid > 0.5, `ease-out should be past halfway at t=0.5, got ${mid}`);
+  });
+});
+
+describe("smoothProgress", () => {
+  it("is 0 at t=0, 1 at duration, and is halfway at midtime", () => {
+    almost(smoothProgress(0, 400), 0);
+    almost(smoothProgress(400, 400), 1);
+    almost(smoothProgress(200, 400), 0.5, 1e-4);
+  });
+});
+
+// --- revealCamera -----------------------------------------------------------
+
+function vsub(a, b) {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+function vdot(a, b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+function vcross(a, b) {
+  return [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ];
+}
+function vlen(v) {
+  return Math.hypot(v[0], v[1], v[2]);
+}
+function vnorm(v) {
+  const l = vlen(v) || 1;
+  return [v[0] / l, v[1] / l, v[2] / l];
+}
+
+/** Screen basis of a camera pose: forward, right, true screen-up. */
+function screenBasis(cam) {
+  const f = vnorm(vsub(cam.aim, cam.position));
+  const r = vnorm(vcross(f, cam.up));
+  const u = vcross(r, f);
+  return { f, r, u };
+}
+
+const TILT15 = (15 * Math.PI) / 180;
+const OPTS = { tilt: TILT15, distance: 8.2, aim: [0, 0.4, 0] };
+
+describe("revealCamera", () => {
+  it("places the camera so the numeral reads upright: +X, -Z, diagonal", () => {
+    for (const texUp of [[1, 0, 0], [0, 0, -1], vnorm([1, 0, -1])]) {
+      const cam = revealCamera(texUp, OPTS);
+      const { r, u } = screenBasis(cam);
+      assert.ok(vdot(texUp, u) > 0.9, `numeral-up ${texUp} is not screen-up`);
+      almost(vdot(texUp, r), 0, 1e-6);
+    }
+  });
+
+  it("puts the camera on the far side, so numeral-up points away from it", () => {
+    const texUp = [1, 0, 0];
+    const cam = revealCamera(texUp, OPTS);
+    const offset = vsub(cam.position, cam.aim);
+    assert.ok(vdot(offset, texUp) < 0, "camera should be behind the numeral");
+  });
+
+  it("honours distance and tilt", () => {
+    const cam = revealCamera([0, 0, -1], OPTS);
+    const offset = vsub(cam.position, cam.aim);
+    almost(vlen(offset), 8.2, 1e-6);
+    const fromVertical = Math.acos(vdot(vnorm(offset), [0, 1, 0]));
+    almost(fromVertical, TILT15, 1e-6);
+  });
+
+  it("tilt 0 is straight overhead and still has a defined screen basis", () => {
+    const cam = revealCamera([0, 0, -1], { ...OPTS, tilt: 0 });
+    almost(cam.position[0], 0);
+    almost(cam.position[1], 0.4 + 8.2);
+    almost(cam.position[2], 0);
+    const { r, u } = screenBasis(cam);
+    assert.ok(vlen(r) > 0.999, "right vector degenerate at tilt 0");
+    assert.ok(vdot([0, 0, -1], u) > 0.999, "screen-up should be -Z overhead");
+  });
+
+  it("up is the ground-plane screen-up, never world-up", () => {
+    const cam = revealCamera([1, 0, 0], OPTS);
+    almost(cam.up[1], 0, 1e-9);
+    almost(vlen(cam.up), 1, 1e-9);
+  });
+
+  it("falls back without NaN when numeral-up is vertical", () => {
+    const cam = revealCamera([0, 1, 1e-9], OPTS);
+    for (const k of ["position", "up", "aim"]) {
+      for (const x of cam[k]) assert.ok(Number.isFinite(x), `${k} has NaN`);
+    }
+    almost(cam.up[2], -1, 1e-6);
+  });
+
+  it("returns a copy of aim, not the caller's array", () => {
+    const aim = [0, 0.4, 0];
+    const cam = revealCamera([1, 0, 0], { ...OPTS, aim });
+    assert.notStrictEqual(cam.aim, aim);
+    assert.deepEqual(cam.aim, aim);
+  });
+});
+
+describe("arenaPlanes", () => {
+  it("makes `count` planes, every one tangent to the circle of `radius`", () => {
+    const planes = arenaPlanes(3.9, 16);
+    assert.equal(planes.length, 16);
+    for (const { normal, position } of planes) {
+      almost(Math.hypot(position[0], position[1], position[2]), 3.9, 1e-9);
+      almost(Math.hypot(...normal), 1, 1e-9);
+      assert.equal(normal[1], 0, "the ring is vertical");
+      assert.equal(position[1], 0, "the ring stands on the floor");
+    }
+  });
+
+  it("every normal points at the origin, so the die is inside", () => {
+    for (const { normal, position } of arenaPlanes(3.2, 12)) {
+      // Inward means the vector from the plane to the origin agrees with it.
+      const toCentre = [-position[0], -position[1], -position[2]];
+      const d =
+        normal[0] * toCentre[0] + normal[1] * toCentre[1] + normal[2] * toCentre[2];
+      assert.ok(d > 0, `normal ${normal} faces away from the centre`);
+    }
+  });
+
+  it("holds every landing the bound allows, and none the ring should not", () => {
+    const R = 3.9;
+    const planes = arenaPlanes(R, 16);
+    // Clearance of a point from the ring: how far inside the nearest plane it
+    // sits, along that plane's inward normal. Positive is contained.
+    const clearance = (px, pz) =>
+      Math.min(
+        ...planes.map(
+          ({ normal, position }) =>
+            normal[0] * (px - position[0]) + normal[2] * (pz - position[2]),
+        ),
+      );
+    // How far a point on the inscribed circle can sit inside the nearest
+    // flat: R(1 - cos(pi / count)), the chord's sagitta.
+    const slack = R * (1 - Math.cos(Math.PI / 16));
+    for (let a = 0; a < Math.PI * 2; a += 0.05) {
+      // The landing bound: the die's 0.82 plus 0.3 of margin, inside the ring.
+      const bound = R - 1.12;
+      assert.ok(
+        clearance(bound * Math.cos(a), bound * Math.sin(a)) > 0.82,
+        `a die landing at radius ${bound}, angle ${a}, must clear the ring`,
+      );
+      // At the inscribed radius the ring is on top of the die: it never cuts
+      // inside R (clearance never goes negative), and it never lets a point
+      // there be more than the flats' own slack inside it either.
+      const c = clearance(R * Math.cos(a), R * Math.sin(a));
+      assert.ok(c >= -1e-9, `the ring cuts inside its own radius at ${a}: ${c}`);
+      assert.ok(c <= slack + 1e-9, `the ring bulges ${c} at ${a}, past ${slack}`);
+    }
+    // The flats bulge outward between planes. That slack has to stay under
+    // the landing margin or the bound stops being honest about the worst
+    // angle, which is the corner between two planes.
+    assert.ok(slack < 0.3, `corner slack ${slack} must stay under the margin`);
+  });
+});
+
+describe("reboundSpeed", () => {
+  it("is sqrt(2 g h) and round-trips through the ballistic rise", () => {
+    const g = 120;
+    for (const h of [0.5, 1.64, 6.56]) {
+      const v = reboundSpeed(h, -g, 0);
+      almost(v, Math.sqrt(2 * g * h), 1e-9);
+      almost((v * v) / (2 * g), h, 1e-9);
+    }
+  });
+
+  it("clamps a negative height to a standstill rather than returning NaN", () => {
+    assert.equal(reboundSpeed(-1, -120), 0);
+  });
+
+  // The authored bounce is a promise about the HEIGHT the die reaches. Under
+  // damping the ballistic speed lands it short, so the profile's own damping
+  // has to be inverted or the 4 die-heights quietly becomes 3.7.
+  it("reaches the height it was asked for, damped or not", () => {
+    const g = 120;
+    for (const d of [0, 0.2, 0.35, 0.6]) {
+      for (const h of [0.5, 1.64, 6.56]) {
+        const v = reboundSpeed(h, -g, d);
+        almost(dampedRise(v, -g, d), h, 1e-6);
+      }
+    }
+  });
+
+  it("needs more speed the more damping there is", () => {
+    const g = 120;
+    const speeds = [0, 0.2, 0.35, 0.6].map((d) => reboundSpeed(6.56, -g, d));
+    for (let i = 1; i < speeds.length; i++) {
+      assert.ok(
+        speeds[i] > speeds[i - 1],
+        `damping ${i} wanted ${speeds[i]}, no more than ${speeds[i - 1]}`,
+      );
+    }
+  });
+
+  it("the profile's own damping is inverted, so the authored bounce is honest", () => {
+    const h = THROW.bounceHeights[0] * 1.61;
+    almost(dampedRise(reboundSpeed(h)), h, 1e-6);
+  });
+});
+
+describe("riseVelocityAt", () => {
+  it("is the ballistic line when nothing is damping it", () => {
+    for (const t of [0, 0.02, 0.055]) almost(riseVelocityAt(40, t, -120, 0), 40 - 120 * t, 1e-9);
+  });
+
+  it("starts at v0 and falls faster than ballistic once damped", () => {
+    almost(riseVelocityAt(40, 0, -120, 0.35), 40, 1e-9);
+    for (const t of [0.02, 0.055, 0.2]) {
+      assert.ok(
+        riseVelocityAt(40, t, -120, 0.35) < 40 - 120 * t,
+        `damped rise at ${t}s must sit under the ballistic line`,
+      );
+    }
+  });
+
+  // Integrating the velocity to zero must give back the height dampedRise
+  // claims, which is the consistency check between the two formulas.
+  it("crosses zero exactly at the apex dampedRise predicts", () => {
+    const g = 120;
+    const d = 0.35;
+    const v0 = 40;
+    const lambda = -Math.log(1 - d);
+    const tApex = (1 / lambda) * Math.log(1 + (lambda * v0) / g);
+    almost(riseVelocityAt(v0, tApex, -g, d), 0, 1e-9);
+    // Trapezoid the velocity up to the apex; it must match the closed form.
+    let h = 0;
+    const n = 200000;
+    for (let i = 0; i < n; i++) {
+      const a = riseVelocityAt(v0, (tApex * i) / n, -g, d);
+      const b = riseVelocityAt(v0, (tApex * (i + 1)) / n, -g, d);
+      h += ((a + b) / 2) * (tApex / n);
+    }
+    almost(h, dampedRise(v0, -g, d), 1e-6);
+  });
+});
+
+describe("THROW profile", () => {
+  const inRange = (v, [lo, hi]) => v >= lo && v <= hi;
+
+  it("throwPose draws every component from THROW.launch", () => {
+    const L = THROW.launch;
+    for (const seed of [0, 0.25, 0.5, 0.75, 0.999]) {
+      const rng = () => seed;
+      const p = throwPose(rng);
+      assert.ok(inRange(p.position[0], L.x), `x ${p.position[0]}`);
+      assert.ok(inRange(p.position[1], L.y), `y ${p.position[1]}`);
+      assert.ok(inRange(p.position[2], L.z), `z ${p.position[2]}`);
+      assert.ok(inRange(p.velocity[0], L.vx), `vx ${p.velocity[0]}`);
+      assert.ok(inRange(p.velocity[1], L.vy), `vy ${p.velocity[1]}`);
+      assert.ok(inRange(p.velocity[2], L.vz), `vz ${p.velocity[2]}`);
+      for (let k = 0; k < 3; k++) {
+        assert.ok(Math.abs(p.angularVelocity[k]) <= L.spin[k] + 1e-9, `spin ${k}`);
+      }
+    }
+    for (let i = 0; i < 200; i++) {
+      const p = throwPose();
+      assert.ok(p.position[1] < 3, "launch is a hand height, not a ceiling drop");
+      assert.ok(p.velocity[2] < 0, "thrown into the arena (-z)");
+    }
+  });
+
+  it("every launch draw fits the whole die inside the arena", () => {
+    // The die's circumradius is ~0.82 (DIE_SCALE 0.72 on circumradius-1.12-1.22
+    // geometry), NOT 0.72 -- and a launch that clears the wall by less than
+    // that spawns the die inside it, where the solver ejects it at ~10 u/s.
+    // That was real: launch.z ran to 1.4 against a wall at 1.62.
+    const R = 0.82;
+    for (let i = 0; i < 500; i++) {
+      const p = throwPose();
+      const r = Math.hypot(p.position[0], p.position[2]);
+      assert.ok(
+        r + R < THROW.arena.radius,
+        `spawn at radius ${r} does not fit inside the ring at ${THROW.arena.radius}`,
+      );
+    }
+  });
+
+  it("the authored first bounce is four die-heights and reachable", () => {
+    assert.ok(THROW.bounceHeights.length >= 2, "two hops are authored");
+    assert.ok(THROW.bounceHeights[0] >= 1, "the first bounce is authored");
+    // Cam's ruling: the second hop must READ as a bounce in its own right and
+    // must not out-jump the first, or the chain looks like two throws.
+    assert.ok(
+      THROW.bounceHeights[1] < THROW.bounceHeights[0],
+      "the second hop must be smaller than the first",
+    );
+    assert.ok(THROW.bounceHeights[1] >= 1, "the second hop must still be visible");
+    // One die-height is ~1.64, so this is ~6.6 units of rise. The lid is the
+    // only thing above it and must stay clear, or the leap pings off it.
+    const rise = THROW.bounceHeights[0] * 1.76;
+    assert.ok(rise < 9, `a ${rise}-unit leap needs headroom under the lid`);
+    // The kick is a velocity, and the velocity that reaches h under g is
+    // sqrt(2gh) -- nothing else. A rebound of that speed must come back down
+    // hard enough to still count as a bounce, or the chain ends at one.
+    const v = reboundSpeed(rise);
+    assert.ok(v > THROW.bounceSpeed, `${v} u/s must outrun the bounce floor`);
+  });
+
+  it("derived constants come from the profile", () => {
+    assert.equal(GRAVITY_Y, THROW.gravityY);
+    assert.equal(FLIGHT_MAX_MS, THROW.flightMaxMs);
+    assert.equal(LIN_SLEEP, THROW.rest.lin);
+    assert.equal(ANG_SLEEP, THROW.rest.ang);
+    assert.ok(THROW.gravityY <= -120, "heavy: at least ~2.5x the old -48");
+    assert.ok(THROW.physStep <= 1 / 100, "fine steps for fast contacts");
+    // The slam's travel per step against the die's own 0.82 circumradius.
+    // Above about half of it the first contact lands a step late and deep.
+    const perStep = Math.abs(THROW.launch.vy[0]) * THROW.physStep;
+    assert.ok(perStep < 0.45, `${perStep} units per step is tunnelling range`);
+    assert.ok(
+      THROW.contact.wall.restitution <= 0.15,
+      "the ring is dead: a wall touch damps, it does not return the die",
+    );
+    assert.ok(
+      THROW.contact.wall.friction > THROW.contact.friction,
+      "the ring grips harder than the floor",
+    );
+    // cannon-es applies damping as v *= (1 - damping) ** dt. At 1 or more the
+    // base is zero or negative: the velocity flips sign every step and grows,
+    // and the die tunnels straight out through a wall. Found the hard way at
+    // angular 1.6 and linear 1.2 -- both looked like plausible tuning values
+    // and both put the die at z = -9 with the flight pinned at its cap.
+    assert.ok(THROW.damping.linear < 1, "damping must stay under 1");
+    assert.ok(THROW.damping.angular < 1, "damping must stay under 1");
+  });
+});
+
+describe("quatSlerp", () => {
+  const qn = (q) => {
+    const l = Math.hypot(...q);
+    return q.map((x) => x / l);
+  };
+  const a = [0, 0, 0, 1];
+  const b = qn([0, Math.sin(Math.PI / 4), 0, Math.cos(Math.PI / 4)]); // 90° about Y
+
+  it("hits both endpoints", () => {
+    assert.deepEqual(quatSlerp(a, b, 0), a);
+    for (let k = 0; k < 4; k++) almost(quatSlerp(a, b, 1)[k], b[k], 1e-9);
+  });
+
+  it("midpoint is unit length and halfway (45° about Y)", () => {
+    const m = quatSlerp(a, b, 0.5);
+    almost(Math.hypot(...m), 1, 1e-9);
+    almost(m[1], Math.sin(Math.PI / 8), 1e-6);
+    almost(m[3], Math.cos(Math.PI / 8), 1e-6);
+  });
+
+  it("takes the shortest arc when b is given as -b", () => {
+    const negB = b.map((x) => -x);
+    const m1 = quatSlerp(a, b, 0.5);
+    const m2 = quatSlerp(a, negB, 0.5);
+    // same rotation: dot is ±1
+    almost(Math.abs(m1[0] * m2[0] + m1[1] * m2[1] + m1[2] * m2[2] + m1[3] * m2[3]), 1, 1e-9);
+  });
+
+  it("off-midpoint diverges from a plain normalized lerp (proves the trig path, not nlerp)", () => {
+    const t = 0.25;
+    const naiveLerp = qn([
+      (1 - t) * a[0] + t * b[0],
+      (1 - t) * a[1] + t * b[1],
+      (1 - t) * a[2] + t * b[2],
+      (1 - t) * a[3] + t * b[3],
+    ]);
+    const s = quatSlerp(a, b, t);
+    const diff = Math.max(...s.map((v, i) => Math.abs(v - naiveLerp[i])));
+    assert.ok(diff > 1e-3, `expected slerp to diverge from nlerp at t=0.25, diff was ${diff}`);
+  });
+});
+
+describe("interpolateFrame", () => {
+  const f0 = { p: { x: 0, y: 1, z: 2 }, q: { x: 0, y: 0, z: 0, w: 1 }, lin: [0, 0, 0], ang: [0, 0, 0] };
+  const f1 = { p: { x: 2, y: 3, z: 4 }, q: { x: 0, y: 1, z: 0, w: 0 }, lin: [0, 0, 0], ang: [0, 0, 0] };
+
+  it("returns the endpoints at t=0 and t=1", () => {
+    assert.deepEqual(interpolateFrame(f0, f1, 0).p, [0, 1, 2]);
+    assert.deepEqual(interpolateFrame(f0, f1, 1).p, [2, 3, 4]);
+  });
+
+  it("position at the midpoint is the mean", () => {
+    assert.deepEqual(interpolateFrame(f0, f1, 0.5).p, [1, 2, 3]);
+  });
+
+  it("quaternion at the midpoint is unit length", () => {
+    almost(Math.hypot(...interpolateFrame(f0, f1, 0.5).q), 1, 1e-9);
+  });
+
+  it("clamps t outside [0,1]", () => {
+    assert.deepEqual(interpolateFrame(f0, f1, -0.5).p, [0, 1, 2]);
+    assert.deepEqual(interpolateFrame(f0, f1, 1.5).p, [2, 3, 4]);
+  });
+});
+
+/**
+ * One real face, captured rather than idealised.
+ *
+ * The d10's face projected into its own texture basis exactly as
+ * `prepareFaces` does it -- `p.dot(texRight)`, `p.dot(texUp)` -- read off a
+ * live `trapezohedron()` in the browser (throwaway probe against the dev
+ * server, 2026-08-24).
+ *
+ * It is a TRIANGLE, not a kite. `trapezohedron()` merges two open
+ * `ConeGeometry(1, 1.18, 5, 1, true)` halves, and three.js emits ONE triangle
+ * per radial segment when `radiusTop` is 0 and there is a single height
+ * segment -- so the solid is a pentagonal bipyramid: 10 triangular faces, 30
+ * non-indexed vertices, one triangle per face group. The face is isosceles,
+ * so its incentre sits on the axis of symmetry, pushed away from the vertex
+ * mean toward the narrow end. That displacement is the whole point of the
+ * fixture: it is the numeral offset a player sees.
+ */
+const D10_FACE = [
+  [-0.536746279291593, -0.5164078400641089],
+  [0.6323843431851929, -0.3935272776983372],
+  [-0.10173005372106768, 0.967896945958624],
+];
+
+/** The d6's face group: two triangles in STRIP order, not fan order. */
+const D6_FACE = [
+  [-0.6100000143051147, 0.6100000143051147],
+  [-0.6100000143051147, -0.6100000143051147],
+  [0.6100000143051147, 0.6100000143051147],
+  [-0.6100000143051147, -0.6100000143051147],
+  [0.6100000143051147, -0.6100000143051147],
+  [0.6100000143051147, 0.6100000143051147],
+];
+
+/** The d12's face group: three triangles fanned about the THIRD vertex. */
+const D12_FACE = [
+  [0.6443442387108318, -0.21701884082424994],
+  [0.40551050549784823, 0.5457454134775641],
+  [-0.007283943055897302, -0.6798704071913091],
+  [0.40551050549784823, 0.5457454134775641],
+  [-0.3937250920237285, 0.5543080891904888],
+  [-0.007283943055897302, -0.6798704071913091],
+  [-0.3937250920237285, 0.5543080891904888],
+  [-0.6488460857598954, -0.2031641278010633],
+  [-0.007283943055897302, -0.6798704071913091],
+];
+
+function shoelace(poly) {
+  let a = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i];
+    const q = poly[(i + 1) % poly.length];
+    a += p[0] * q[1] - q[0] * p[1];
+  }
+  return a / 2;
+}
+
+/** Perpendicular distance from `c` to each edge line of `poly`, in order. */
+function edgeDistances(poly, c) {
+  return poly.map((p, i) => {
+    const q = poly[(i + 1) % poly.length];
+    const ex = q[0] - p[0];
+    const ey = q[1] - p[1];
+    return Math.abs((c[0] - p[0]) * ey - (c[1] - p[1]) * ex) / Math.hypot(ex, ey);
+  });
+}
+
+function vertexMean(poly) {
+  let x = 0;
+  let y = 0;
+  for (const p of poly) {
+    x += p[0];
+    y += p[1];
+  }
+  return [x / poly.length, y / poly.length];
+}
+
+function regularPolygon(n, radius = 1, phase = Math.PI / 2) {
+  return Array.from({ length: n }, (_, i) => {
+    const t = phase + (2 * Math.PI * i) / n;
+    return [radius * Math.cos(t), radius * Math.sin(t)];
+  });
+}
+
+describe("uniquePolygon", () => {
+  it("leaves an already-unique ring alone", () => {
+    assert.deepEqual(uniquePolygon(D10_FACE), D10_FACE);
+  });
+
+  it("drops the duplicates a fan leaves behind", () => {
+    const ring = uniquePolygon(D12_FACE);
+    assert.equal(ring.length, 5);
+    for (const p of ring) {
+      assert.ok(
+        D12_FACE.some((q) => q[0] === p[0] && q[1] === p[1]),
+        `${p} is not one of the source vertices`
+      );
+    }
+  });
+
+  it("returns a simple ring, not the order the triangles arrived in", () => {
+    // The d12's fan visits its apex three times and its rim out of order, so
+    // first-seen order is a self-crossing sequence. A polygon that crosses
+    // itself has no incircle, which is why this matters and is asserted
+    // rather than assumed: consecutive vertices must turn consistently.
+    const ring = uniquePolygon(D12_FACE);
+    const c = vertexMean(ring);
+    for (let i = 0; i < ring.length; i++) {
+      const p = ring[i];
+      const q = ring[(i + 1) % ring.length];
+      const cross = (p[0] - c[0]) * (q[1] - c[1]) - (p[1] - c[1]) * (q[0] - c[0]);
+      assert.ok(cross !== 0, "a ring vertex is collinear with the centre");
+      assert.ok(
+        Math.sign(cross) === Math.sign(shoelace(ring)),
+        `vertices ${i} and ${i + 1} wind against the polygon`
+      );
+    }
+  });
+
+  it("preserves winding", () => {
+    // Both source faces are wound the same way as their first triangle; the
+    // ring must come back on that same side, or the numeral's texture would
+    // be mirrored on half the die.
+    for (const face of [D6_FACE, D12_FACE]) {
+      const firstTriangle = shoelace(face.slice(0, 3));
+      assert.equal(Math.sign(shoelace(uniquePolygon(face))), Math.sign(firstTriangle));
+    }
+    const cw = regularPolygon(5).slice().reverse();
+    assert.ok(shoelace(uniquePolygon(cw)) < 0, "a clockwise input must stay clockwise");
+  });
+
+  it("untangles a strip as well as a fan", () => {
+    // BoxGeometry emits its quad as a STRIP -- first-seen order is a bowtie.
+    const ring = uniquePolygon(D6_FACE);
+    assert.equal(ring.length, 4);
+    almost(Math.abs(shoelace(ring)), 1.22 * 1.22, 1e-6);
+  });
+
+  it("survives degenerate input", () => {
+    assert.deepEqual(uniquePolygon([]), []);
+    assert.equal(uniquePolygon([[1, 1], [1, 1], [1, 1]]).length, 1);
+    assert.equal(uniquePolygon([[0, 0], [1e-9, -1e-9]]).length, 1);
+  });
+});
+
+describe("polygonIncentre", () => {
+  it("is the centroid for an equilateral triangle", () => {
+    const t = regularPolygon(3);
+    const { c, r } = polygonIncentre(t);
+    vecAlmost(c, vertexMean(t), 1e-12);
+    almost(r, 0.5, 1e-12); // inradius of a unit-circumradius equilateral
+  });
+
+  it("is (1, 1) with r = 1 for a 3-4-5 right triangle on the axes", () => {
+    const { c, r } = polygonIncentre([
+      [0, 0],
+      [3, 0],
+      [0, 4],
+    ]);
+    vecAlmost(c, [1, 1], 1e-12);
+    almost(r, 1, 1e-12);
+  });
+
+  it("is the centre with r = 0.5 for the unit square", () => {
+    const { c, r } = polygonIncentre([
+      [0, 0],
+      [1, 0],
+      [1, 1],
+      [0, 1],
+    ]);
+    vecAlmost(c, [0.5, 0.5], 1e-12);
+    almost(r, 0.5, 1e-12);
+  });
+
+  it("is the centre with r = the apothem for a regular pentagon", () => {
+    const p = regularPolygon(5, 1.3);
+    const { c, r } = polygonIncentre(p);
+    vecAlmost(c, [0, 0], 1e-12);
+    almost(r, 1.3 * Math.cos(Math.PI / 5), 1e-12);
+  });
+
+  it("touches all four edges of a kite, which the vertex mean does not", () => {
+    // Every kite is tangential, so an exact incircle exists. This one is
+    // deliberately lopsided: the vertex mean misses the incentre by 0.42.
+    const kite = [
+      [0, 6],
+      [2, 0],
+      [0, -1],
+      [-2, 0],
+    ];
+    const { c, r } = polygonIncentre(kite);
+    for (const d of edgeDistances(kite, c)) almost(d, r, 1e-9);
+    const mean = vertexMean(kite);
+    assert.ok(Math.hypot(c[0] - mean[0], c[1] - mean[1]) > 1e-3, "kite incentre collapsed onto the vertex mean");
+    // area / semiperimeter, independently computed from the diagonals.
+    almost(r, ((7 * 4) / 2) / (Math.hypot(2, 6) + Math.hypot(2, 1)), 1e-9);
+  });
+
+  it("touches every edge of the d10's real face, and is not its vertex mean", () => {
+    const { c, r } = polygonIncentre(uniquePolygon(D10_FACE));
+    const d = edgeDistances(D10_FACE, c);
+    assert.equal(d.length, 3, "the d10 face is a triangle -- see D10_FACE");
+    for (const x of d) almost(x, r, 1e-6);
+    const mean = vertexMean(D10_FACE);
+    const drift = Math.hypot(c[0] - mean[0], c[1] - mean[1]);
+    assert.ok(drift > 1e-3, `incentre and vertex mean coincide (${drift}) -- the remap would be a no-op`);
+  });
+
+  it("touches every edge of the d12's real face", () => {
+    const ring = uniquePolygon(D12_FACE);
+    const { c, r } = polygonIncentre(ring);
+    for (const x of edgeDistances(ring, c)) almost(x, r, 1e-6);
+    // The incentre of a regular pentagon is its centre, so it agrees with the
+    // mean of the FIVE real vertices exactly...
+    vecAlmost(c, vertexMean(ring), 1e-9);
+    // ...and disagrees with the mean of the NINE the fan actually emits, which
+    // is dragged toward the thrice-visited apex. ~0.029 against a circumradius
+    // of 0.68 -- 4 % of the face, downward, which is the "4 sits high on the
+    // d12" defect measured.
+    const raw = vertexMean(D12_FACE);
+    const drag = Math.hypot(c[0] - raw[0], c[1] - raw[1]);
+    assert.ok(drag > 0.02, `the fan-duplicated mean should be dragged off centre, got ${drag}`);
+  });
+
+  it("returns finite numbers for degenerate input instead of throwing", () => {
+    for (const poly of [[], [[2, 3]], [[2, 3], [2, 3]], [[1, 1], [1, 1], [1, 1]], [[0, 0], [1, 1]]]) {
+      const { c, r } = polygonIncentre(poly);
+      assert.ok(Number.isFinite(c[0]) && Number.isFinite(c[1]), `centre not finite for ${JSON.stringify(poly)}`);
+      assert.ok(Number.isFinite(r) && r >= 0, `radius not finite for ${JSON.stringify(poly)}`);
+    }
+  });
+});
+
+/**
+ * Sorted-key, recursive stringify -- a stable serialisation of THROW so it can
+ * be hashed. Deliberately NOT a copy of the literal: THROW is ninety lines of
+ * the densest comments in this project, and a duplicate in a test file is a
+ * second source of truth that rots the first time somebody edits one of them.
+ */
+function stableStringify(v) {
+  if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;
+  if (v && typeof v === "object") {
+    const keys = Object.keys(v).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(v[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(v);
+}
+
+function fnv1a(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+describe("THROW change-detector", () => {
+  // The die redesign is texture work. It has no business moving a throw
+  // number, and "I did not mean to" is not evidence -- this is.
+  //
+  // Regenerate ONLY with a deliberate, reviewed profile change:
+  //   node -e 'import("./physics-roll.js").then(m=>{const s=v=>Array.isArray(v)?`[${v.map(s).join(",")}]`:v&&typeof v==="object"?`{${Object.keys(v).sort().map(k=>`${JSON.stringify(k)}:${s(v[k])}`).join(",")}}`:JSON.stringify(v);let h=2166136261;const t=s(m.THROW);for(let i=0;i<t.length;i++){h^=t.charCodeAt(i);h=Math.imul(h,16777619);}console.log((h>>>0).toString(16).padStart(8,"0"));})'
+  it("THROW is unchanged by the die redesign", () => {
+    assert.equal(fnv1a(stableStringify(THROW)), "82236432");
+  });
+});
+
+
+describe("edgeAlignedUp", () => {
+  const DOWN = [0, -1];
+
+  /** Unit vector along ring edge `i`. */
+  function edgeDir(ring, i) {
+    const p = ring[i];
+    const q = ring[(i + 1) % ring.length];
+    const l = Math.hypot(q[0] - p[0], q[1] - p[1]);
+    return [(q[0] - p[0]) / l, (q[1] - p[1]) / l];
+  }
+
+  it("returns a unit vector square to the edge it chose", () => {
+    // Square to the edge IS the whole point: the baseline runs along the edge,
+    // so the numeral reads straight on its own face rather than a few degrees
+    // off it.
+    for (const ring of [uniquePolygon(D10_FACE), uniquePolygon(D6_FACE), uniquePolygon(D12_FACE)]) {
+      const { c } = polygonIncentre(ring);
+      const { up, edge } = edgeAlignedUp(ring, c, DOWN);
+      almost(Math.hypot(up[0], up[1]), 1, 1e-12);
+      const e = edgeDir(ring, edge);
+      almost(up[0] * e[0] + up[1] * e[1], 0, 1e-12);
+    }
+  });
+
+  it("points into the face, never out of it", () => {
+    for (const ring of [uniquePolygon(D10_FACE), uniquePolygon(D6_FACE), uniquePolygon(D12_FACE)]) {
+      const { c } = polygonIncentre(ring);
+      const { up, edge } = edgeAlignedUp(ring, c, DOWN);
+      const p = ring[edge];
+      const q = ring[(edge + 1) % ring.length];
+      const mx = (p[0] + q[0]) / 2;
+      const my = (p[1] + q[1]) / 2;
+      assert.ok(up[0] * (c[0] - mx) + up[1] * (c[1] - my) > 0, "glyph-up points off the face");
+    }
+  });
+
+  it("picks the edge whose midpoint lies farthest along `down`", () => {
+    const tri = regularPolygon(3);
+    const { c } = polygonIncentre(tri);
+    const { edge } = edgeAlignedUp(tri, c, DOWN);
+    const scores = tri.map((p, i) => {
+      const q = tri[(i + 1) % tri.length];
+      return ((p[0] + q[0]) / 2 - c[0]) * DOWN[0] + ((p[1] + q[1]) / 2 - c[1]) * DOWN[1];
+    });
+    assert.equal(edge, scores.indexOf(Math.max(...scores)));
+  });
+
+  it("follows `down` round the compass", () => {
+    // Rotating the die's downward axis must walk the chosen edge round the
+    // face, or the convention is not doing anything.
+    const tri = regularPolygon(3);
+    const { c } = polygonIncentre(tri);
+    const seen = new Set();
+    for (let deg = 0; deg < 360; deg += 15) {
+      const t = (deg * Math.PI) / 180;
+      seen.add(edgeAlignedUp(tri, c, [Math.cos(t), Math.sin(t)]).edge);
+    }
+    assert.equal(seen.size, 3, "every edge should be reachable");
+  });
+
+  it("turns with the face's own symmetry when `down` is flipped", () => {
+    // A square HAS an opposite edge, so flipping `down` turns the glyph
+    // exactly upside down.
+    const sq = [
+      [0, 0],
+      [1, 0],
+      [1, 1],
+      [0, 1],
+    ];
+    const su = edgeAlignedUp(sq, [0.5, 0.5], [0, -1]).up;
+    const sd = edgeAlignedUp(sq, [0.5, 0.5], [0, 1]).up;
+    almost(su[0] * sd[0] + su[1] * sd[1], -1, 1e-12);
+
+    // A triangle does NOT: opposite an edge is a vertex, so the glyph turns by
+    // 120 degrees, not 180. That is the shape, and it is why a die's numerals
+    // cannot all agree on "up" no matter what convention is chosen -- only on
+    // being square to their own edges.
+    const tri = regularPolygon(3);
+    const { c } = polygonIncentre(tri);
+    const tu = edgeAlignedUp(tri, c, [0, -1]).up;
+    const td = edgeAlignedUp(tri, c, [0, 1]).up;
+    almost(tu[0] * td[0] + tu[1] * td[1], Math.cos((120 * Math.PI) / 180), 1e-12);
+  });
+
+  it("is deterministic on a symmetric face, and does not throw on a degenerate one", () => {
+    // A square with `down` on its diagonal ties two edges exactly. Ties go to
+    // the lower index, every time, so two builds of the same die agree.
+    const sq = [
+      [0, 0],
+      [1, 0],
+      [1, 1],
+      [0, 1],
+    ];
+    const d = [Math.SQRT1_2, -Math.SQRT1_2];
+    const first = edgeAlignedUp(sq, [0.5, 0.5], d).edge;
+    for (let i = 0; i < 5; i++) assert.equal(edgeAlignedUp(sq, [0.5, 0.5], d).edge, first);
+    assert.deepEqual(edgeAlignedUp([], [0, 0], DOWN), { up: [0, 1], edge: -1 });
+    assert.deepEqual(edgeAlignedUp([[1, 1], [1, 1]], [1, 1], DOWN), { up: [0, 1], edge: -1 });
+  });
+});

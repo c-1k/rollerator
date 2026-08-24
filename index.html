@@ -48,12 +48,13 @@
       href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;1,500&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=medieval-soft" />
     <script type="importmap">
       {
         "imports": {
           "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+          "cannon-es": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js"
         }
       }
     </script>
@@ -120,35 +121,84 @@
       </blockquote>
 
       <form id="war-table" autocomplete="off">
-        <label class="plaque">
-          <span>Environment</span>
-          <select id="environment" name="environment">
-            <option value="siege" selected>Castle siege</option>
-            <option value="bog">Poison bog</option>
-            <option value="forest">Primeval forest</option>
-            <option value="cavern">Deep caverns</option>
-            <option value="ice">Glacial pass</option>
-            <option value="volcano">Caldera</option>
-            <option value="hoard">Dragon hoard</option>
-          </select>
-        </label>
-        <label class="plaque">
-          <span>Die</span>
-          <select id="die" name="die">
-            <option value="d4">d4</option>
-            <option value="d6">d6</option>
-            <option value="d8">d8</option>
-            <option value="d10">d10</option>
-            <option value="d12">d12</option>
-            <option value="d20" selected>d20</option>
-            <option value="d100">d100</option>
-          </select>
-        </label>
-        <button type="submit" id="roll">Roll</button>
-        <button type="button" id="share" hidden>Share</button>
+        <!--
+          Two registers of one plaque. Row 1 is a three-track grid --
+          [reserved] [Roll] [share stud] -- and the outer tracks are declared
+          widths, so they exist whether or not the share button does. That is
+          what anchors Roll: its box is a function of the panel, never of
+          which siblings happen to be rendered.
+        -->
+        <div class="rail rail-act">
+          <button type="submit" id="roll">Roll</button>
+          <button
+            type="button"
+            id="share"
+            hidden
+            aria-label="Share"
+            title="Share this roll"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M12 3.6v10.3M8.5 7.1 12 3.6l3.5 3.5"
+              />
+              <path
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M8 10.6H5.4v9.8h13.2v-9.8H16"
+              />
+            </svg>
+          </button>
+        </div>
+        <div class="rail rail-pick">
+          <label class="plaque">
+            <span>Environment</span>
+            <select id="environment" name="environment">
+              <option value="siege" selected>Castle siege</option>
+              <option value="bog">Poison bog</option>
+              <option value="forest">Primeval forest</option>
+              <option value="cavern">Deep caverns</option>
+              <option value="ice">Glacial pass</option>
+              <option value="volcano">Caldera</option>
+              <option value="hoard">Dragon hoard</option>
+            </select>
+          </label>
+          <label class="plaque">
+            <span>Die skin</span>
+            <select id="skin" name="skin">
+              <option value="auto" selected>Match environment</option>
+              <option value="iron">Cold Iron</option>
+              <option value="wet">Bog Oak</option>
+              <option value="bark">Wyrmbark</option>
+              <option value="stone">Runestone</option>
+              <option value="ice">Glacier Heart</option>
+              <option value="lava">Obsidian Flow</option>
+              <option value="gold">Dragon&#39;s Gold</option>
+            </select>
+          </label>
+          <label class="plaque">
+            <span>Die</span>
+            <select id="die" name="die">
+              <option value="d4">d4</option>
+              <option value="d6">d6</option>
+              <option value="d8">d8</option>
+              <option value="d10">d10</option>
+              <option value="d12">d12</option>
+              <option value="d20" selected>d20</option>
+              <option value="d100">d100</option>
+            </select>
+          </label>
+        </div>
       </form>
       </div>
     </div>
-    <script type="module" src="app.js"></script>
+    <script type="module" src="app.js?v=faces512"></script>
   </body>
 </html>

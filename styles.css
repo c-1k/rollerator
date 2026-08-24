@@ -21,6 +21,51 @@
   --ember: #e39a3a;
   --core: #ffd27a;
   --rim: rgba(227, 154, 58, 0.35);
+  /* Malachite set in iron: the one cold, living colour in a world lit by
+     fire. Lit at the top like the gold it replaces, so the two read as the
+     same material family under the same lamp. */
+  --jade-lit: #1e8452;
+  --jade: #14663f;
+  --jade-deep: #0b4227;
+  --jade-rim: #3fb277;
+  --parchment: #f7edd4;
+  /* The relief of the Roll slab, held apart from its glow so the glow can
+     breathe in @keyframes without restating it. The inner jade line inside a
+     gold border is the heraldic reading: or on vert, gold upon green. */
+  --roll-relief:
+    0 0 0 1px rgba(0, 0, 0, 0.72),
+    inset 0 0 0 1px rgba(4, 32, 19, 0.62),
+    inset 0 2px 0 rgba(198, 255, 220, 0.2),
+    inset 0 -4px 11px rgba(0, 0, 0, 0.48);
+  /* Reserved width of the share stud. Declared on BOTH sides of Roll, which
+     is the whole anchoring mechanism -- see #war-table. */
+  --slot: 2.75rem;
+  /* Not one right angle left on the bar. Every corner carries TWO radii, so
+     the curve is elliptical rather than circular -- the difference between a
+     corner that was forged and worn and a corner that was set in a stylesheet.
+     Bottoms are tighter than tops, the way a chest lid or an altar tablet
+     sits on its base. */
+  --edge-panel: 20px 20px 14px 14px / 15px 15px 11px 11px;
+  --edge-slab: 14px 14px 12px 12px / 12px 12px 10px 10px;
+  --edge-plate: 13px 13px 11px 11px / 10px 10px 9px 9px;
+  /* Vellum tooth. Inline feTurbulence -- no asset, no request. */
+  --tooth: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='t'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23t)'/%3E%3C/svg%3E");
+  /* Same tooth with its opacity baked in, because a background LAYER cannot
+     carry one -- and the grain on the Roll plate has to sit UNDER the
+     lettering, which rules out doing it with a pseudo-element. */
+  --tooth-faint: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='t'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23t)' opacity='0.075'/%3E%3C/svg%3E");
+  /* The bezel. A cast band, not a stroke: lit hard along the top, falling to
+     old gold through the middle, with a thin kick at the bottom edge where
+     the floor throws light back up. Held in a variable because the border
+     and the two rivets are struck from the same metal. */
+  --gold-cast: linear-gradient(
+    180deg,
+    #ffe6ab 0%,
+    #e8bd6d 22%,
+    #b8862f 50%,
+    #7d5a1d 76%,
+    #d3a552 100%
+  );
 }
 
 * {
@@ -57,9 +102,13 @@ body {
 
 .film {
   position: absolute;
-  width: 8px;
-  height: 8px;
-  opacity: 0;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 50%;
+  opacity: 1;
   pointer-events: none;
 }
 
@@ -129,8 +178,16 @@ body {
   height: 44px;
   padding: 0;
   color: var(--core);
-  background: rgba(18, 14, 11, 0.55);
-  border: 1px solid var(--rim);
+  /* Share's twin by construction, so it follows share into the round. */
+  background:
+    radial-gradient(circle at 34% 26%, rgba(255, 210, 122, 0.17), transparent 58%),
+    linear-gradient(180deg, rgba(42, 32, 25, 0.82), rgba(14, 11, 9, 0.88));
+  border: 1px solid rgba(227, 154, 58, 0.44);
+  border-radius: 50%;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 210, 122, 0.18),
+    inset 0 -2px 5px rgba(0, 0, 0, 0.45),
+    0 2px 6px rgba(0, 0, 0, 0.5);
   cursor: pointer;
 }
 
@@ -179,6 +236,10 @@ body {
   text-align: center;
   background: linear-gradient(180deg, rgba(18, 14, 11, 0.82), rgba(11, 9, 7, 0.9));
   border: 1px solid var(--rim);
+  /* The card is not the bar and keeps its quieter material, but it sits
+     directly against it -- leaving the one square corner on screen right
+     above the softened plaque read as an oversight, not a distinction. */
+  border-radius: 16px 16px 13px 13px / 13px 13px 10px 10px;
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4);
   pointer-events: none;
 }
@@ -226,34 +287,148 @@ body {
   color: var(--ember);
 }
 
+/*
+ * The war table: one iron plaque in two registers.
+ *
+ * ANCHORING. The panel has a declared width and row 1 has declared outer
+ * tracks, so the Roll button's box is a pure function of the panel -- not of
+ * which siblings are rendered, not of the label font, not of which
+ * environment is selected. Every state change (idle -> rolling -> rolled,
+ * share appearing, quote card opening, a longer option being chosen) leaves
+ * its bounding rect byte-identical. Reserve the space; never reflow around
+ * the affordance that appears.
+ */
 #war-table {
   position: relative;
   z-index: 6;
-  display: flex;
-  gap: 0.75rem;
-  align-items: end;
-  padding: 0.85rem 0.95rem;
+  display: grid;
+  gap: 0.5rem;
+  width: min(32rem, 100%);
+  padding: 0.62rem 0.95rem 0.68rem;
   pointer-events: auto;
-  background: linear-gradient(180deg, rgba(28, 22, 18, 0.86), rgba(11, 9, 7, 0.92));
-  border: 1px solid var(--rim);
+  /* Oiled leather over dark oak, with the lamp above and to the front: a warm
+     bloom at the top edge, the bottom falling away into the shadow the film is
+     already casting. */
+  background:
+    radial-gradient(125% 88% at 50% -22%, rgba(255, 210, 122, 0.1), transparent 62%),
+    linear-gradient(180deg, rgba(38, 29, 23, 0.9), rgba(11, 9, 7, 0.94));
+  border: 1px solid rgba(227, 154, 58, 0.44);
+  border-radius: var(--edge-panel);
   box-shadow:
-    0 0 0 1px #000,
-    0 18px 40px rgba(0, 0, 0, 0.55),
-    inset 0 1px 0 rgba(255, 210, 122, 0.12);
+    0 0 0 1px rgba(0, 0, 0, 0.8),
+    0 20px 44px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 210, 122, 0.16),
+    inset 0 -20px 34px rgba(0, 0, 0, 0.34);
+}
+
+/* The engraved rule inside the edge -- the double border of a manuscript
+   page, or the scribe line on a tooled cover. Absolute, so it does NOT
+   become a third grid row. */
+#war-table::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: 4px;
+  border: 1px solid rgba(227, 154, 58, 0.17);
+  border-radius: calc(20px - 4px) calc(20px - 4px) calc(14px - 4px) calc(14px - 4px) /
+    calc(15px - 4px) calc(15px - 4px) calc(11px - 4px) calc(11px - 4px);
+  pointer-events: none;
+}
+
+#war-table::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  border-radius: inherit;
+  opacity: 0.055;
+  background-image: var(--tooth);
+  pointer-events: none;
+}
+
+/* Both rails ride ABOVE the two decorative layers. */
+.rail {
+  position: relative;
+  z-index: 1;
+}
+
+.rail-act {
+  display: grid;
+  /* [reserved] [Roll] [share stud]. Both outer tracks are declared widths,
+     so the track exists even while #share is display:none. */
+  grid-template-columns: var(--slot) minmax(0, 1fr) var(--slot);
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.rail-pick {
+  display: grid;
+  /* [Environment] [Die skin] [Die]. Declared tracks, so a select's box does
+     not depend on which option is selected -- and minmax(0, ...) so a long
+     option cannot blow its track open and shove the others. Row 1 above is
+     untouched; the Roll button's anchoring contract lives there. */
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1.3fr) minmax(0, 0.55fr);
+  gap: 0.55rem;
+  align-items: end;
+  padding-top: 0.68rem;
+}
+
+/* A sourcebook rule, not a border: it fades out before it reaches either
+   edge, so nothing squares off against the panel's corners. */
+.rail-pick::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 7%;
+  left: 7%;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(227, 154, 58, 0.36) 16%,
+    rgba(227, 154, 58, 0.36) 84%,
+    transparent
+  );
+  pointer-events: none;
+}
+
+/* The lozenge on the rule -- heraldry's own full stop. */
+.rail-pick::after {
+  content: "";
+  position: absolute;
+  top: -3px;
+  left: 50%;
+  width: 7px;
+  height: 7px;
+  margin-left: -3.5px;
+  transform: rotate(45deg);
+  background: linear-gradient(135deg, var(--core), var(--ember));
+  box-shadow:
+    0 0 7px rgba(227, 154, 58, 0.5),
+    0 0 0 2.5px rgba(11, 9, 7, 0.92);
+  pointer-events: none;
 }
 
 .plaque {
   display: grid;
-  gap: 0.28rem;
-  min-width: 11rem;
+  gap: 0.24rem;
+  min-width: 0;
 }
 
 .plaque span {
+  padding-left: 0.08rem;
   font-family: "Cinzel", serif;
-  font-size: 0.68rem;
-  letter-spacing: 0.28em;
+  font-size: 0.6rem;
+  letter-spacing: 0.26em;
   text-transform: uppercase;
-  color: var(--ember);
+  /* Quiet, but not below AA: 0.66 alpha measured 4.16:1 on this panel at
+     9.6px, 0.78 measures 5.35:1. Hierarchy is carried by size and position
+     here, so the label can afford the contrast. */
+  color: rgba(227, 154, 58, 0.78);
+  /* Chiselled in, not printed on: the cut edge below, the lit edge above. */
+  text-shadow:
+    0 1px 0 rgba(0, 0, 0, 0.8),
+    0 -1px 0 rgba(255, 210, 122, 0.05);
 }
 
 select,
@@ -276,17 +451,48 @@ button:disabled {
 select {
   appearance: none;
   padding: 0.65rem 2rem 0.65rem 0.8rem;
-  background-image: linear-gradient(45deg, transparent 50%, var(--ember) 50%),
-    linear-gradient(135deg, var(--ember) 50%, transparent 50%);
-  background-position:
-    calc(100% - 16px) 54%,
-    calc(100% - 11px) 54%;
-  background-size:
-    5px 5px,
-    5px 5px;
+  /* Was two gradient triangles meeting at a hard point. Now a drawn chevron
+     with round caps -- the same stroked hand as the mute and share glyphs. */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1.5 2.2 6 6.1l4.5-3.9' fill='none' stroke='%23e39a3a' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-position: calc(100% - 11px) 55%;
+  background-size: 12px 8px;
   background-repeat: no-repeat;
   font-family: "Cinzel", serif;
   font-size: 0.95rem;
+}
+
+/* Native <select> throughout -- the ids and keyboard behaviour are load
+   bearing. Only the skin changes: recessed brass nameplates, sized and
+   coloured to sit UNDER the Roll slab in the reading order. */
+.plaque select {
+  width: 100%;
+  min-height: 40px;
+  padding: 0.4rem 1.7rem 0.4rem 0.68rem;
+  font-size: 0.82rem;
+  letter-spacing: 0.03em;
+  color: #dbc8a7;
+  background-color: rgba(9, 7, 6, 0.72);
+  background-position: calc(100% - 10px) 55%;
+  border-color: rgba(227, 154, 58, 0.28);
+  border-radius: var(--edge-plate);
+  /* Sunk into the leather rather than laid on it. */
+  box-shadow:
+    inset 0 2px 4px rgba(0, 0, 0, 0.55),
+    0 1px 0 rgba(255, 210, 122, 0.05);
+  cursor: pointer;
+  text-overflow: ellipsis;
+  /* Draws the OS popup dark on macOS instead of a white sheet. */
+  color-scheme: dark;
+}
+
+.plaque select:hover {
+  color: var(--core);
+  border-color: rgba(227, 154, 58, 0.5);
+}
+
+.plaque option {
+  background: #120e0b;
+  color: var(--core);
 }
 
 select:focus,
@@ -295,33 +501,170 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
-#roll,
-#share {
-  font-family: "Cinzel Decorative", serif;
-  font-size: 1.15rem;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  padding: 0.82rem 1.6rem;
-  cursor: pointer;
-  min-width: 8.5rem;
-  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), filter 0.2s ease;
-}
-
+/* The attractor, and now a cartouche: a green field held in a cast gold
+   bezel, riveted at each end. Bigger than anything else on screen, the only
+   cold colour in the frame, and the only thing that moves while nothing is
+   happening.
+ *
+ * WHY THE BORDER IS TRANSPARENT. A 1px gold hairline read as a stroke someone
+ * put round a button. A bezel has to have width and its own lighting, and
+ * `border-image` would square the corners off. So the border is 3px of
+ * nothing and the gold is a background layer clipped to the border box, while
+ * the green field is clipped to the padding box -- one element, two clips,
+ * concentric radii for free. `box-sizing: border-box` means the extra 2px of
+ * border per side comes out of the padding box, not out of the anchored rect.
+ */
 #roll {
-  color: #1a1008;
-  background: linear-gradient(180deg, #ffd27a, #e39a3a 55%, #9a5a18);
-  border-color: #ffd27a;
+  position: relative;
+  grid-column: 2;
+  /* Was 3.4rem/0.9rem, which gave a 6.2:1 plate -- at that aspect no radius
+     reads as anything but a pill. Taller pulls it to ~4.7:1: a tablet. */
+  min-height: 4rem;
+  padding: 0.95rem 1rem;
+  font-family: "Cinzel Decorative", serif;
+  font-size: clamp(1.3rem, 3.6vw, 1.62rem);
+  letter-spacing: 0.3em;
+  /* letter-spacing hangs a trailing gap after the last glyph; the indent
+     pays it back so the word sits optically centred. */
+  text-indent: 0.3em;
+  text-transform: uppercase;
+  cursor: pointer;
+  color: var(--parchment);
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.55);
+  /* Topmost first: hammered grain, the lamp on the field, the jade itself,
+     then the bezel underneath showing only through the transparent border. */
+  background-color: transparent;
+  background-image:
+    var(--tooth-faint),
+    radial-gradient(120% 140% at 50% -30%, rgba(160, 255, 200, 0.16), transparent 58%),
+    linear-gradient(180deg, var(--jade-lit) 0%, var(--jade) 52%, var(--jade-deep) 100%),
+    var(--gold-cast);
+  background-origin: padding-box, padding-box, padding-box, border-box;
+  background-clip: padding-box, padding-box, padding-box, border-box;
+  border: 3px solid transparent;
+  border-radius: var(--edge-slab);
+  box-shadow: var(--roll-relief), 0 10px 26px rgba(46, 170, 106, 0.36);
+  transition:
+    transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
+    filter 0.2s ease,
+    border-color 0.2s ease;
 }
 
+/* Two rivets struck through the plate, one at each end -- the same gold as
+   the bezel, so they read as the pins holding it on rather than as flecks in
+   the enamel. Each is one gradient: domed highlight, gold body, then a dark
+   seat ring where it bites into the green. The pair share a layer, which is
+   why the portrait override can move both with one background-position. */
+#roll::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background-image:
+    radial-gradient(
+      circle 4.5px at 17px 50%,
+      #fff6dd 0%,
+      #f0c877 34%,
+      #a8781f 68%,
+      rgba(3, 26, 15, 0.9) 90%,
+      transparent 100%
+    ),
+    radial-gradient(
+      circle 4.5px at calc(100% - 17px) 50%,
+      #fff6dd 0%,
+      #f0c877 34%,
+      #a8781f 68%,
+      rgba(3, 26, 15, 0.9) 90%,
+      transparent 100%
+    );
+  background-repeat: no-repeat;
+  pointer-events: none;
+}
+
+@keyframes roll-breathe {
+  0%,
+  100% {
+    box-shadow: var(--roll-relief), 0 9px 24px rgba(46, 170, 106, 0.28);
+  }
+  50% {
+    box-shadow: var(--roll-relief), 0 13px 34px rgba(70, 205, 135, 0.5);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* box-shadow only: the glow breathes, the box never moves. */
+  #roll:not(:disabled) {
+    animation: roll-breathe 4.6s ease-in-out infinite;
+  }
+}
+
+/* Deliberately NOT border-color any more: the border is the window the bezel
+   shows through, so colouring it would paint a flat green ring over the gold.
+   The lift is the whole object brightening, which is what metal does. */
+#roll:hover {
+  filter: brightness(1.1) saturate(1.05);
+}
+
+/* A round iron boss with an etched glyph -- deliberately the same object as
+   the mute button top-right, so the two secondary controls read as one
+   family. Circular, which is both the most medieval fitting on the bar and
+   the furthest thing from a right angle. */
 #share {
+  position: relative;
+  grid-column: 3;
+  justify-self: center;
+  display: grid;
+  place-items: center;
+  width: var(--slot);
+  height: var(--slot);
+  padding: 0;
+  cursor: pointer;
   color: var(--core);
-  background: #120e0b;
+  background:
+    radial-gradient(circle at 34% 26%, rgba(255, 210, 122, 0.17), transparent 58%),
+    linear-gradient(180deg, rgba(42, 32, 25, 0.88), rgba(14, 11, 9, 0.92));
+  border-color: rgba(227, 154, 58, 0.44);
+  border-radius: 50%;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 210, 122, 0.18),
+    inset 0 -2px 5px rgba(0, 0, 0, 0.45),
+    0 2px 6px rgba(0, 0, 0, 0.5);
+  transition:
+    transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
+    filter 0.2s ease,
+    border-color 0.2s ease;
+}
+
+#share svg {
+  width: 20px;
+  height: 20px;
+}
+
+#share:hover {
+  filter: brightness(1.15);
   border-color: var(--ember);
 }
 
-#roll:hover,
-#share:hover {
-  filter: brightness(1.08);
+/* Copied / Saved / Failed. A floating pill, not a label swap: the button is
+   an icon now, and rewriting its text content would eat the glyph AND
+   resize the stud. Absolute, so it costs no layout. */
+#share[data-flash]::after {
+  content: attr(data-flash);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.5rem);
+  transform: translateX(-50%);
+  padding: 0.24rem 0.55rem;
+  border-radius: 9px / 7px;
+  font-family: "Cinzel", serif;
+  font-size: 0.6rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--core);
+  background: rgba(11, 9, 7, 0.94);
+  border: 1px solid var(--rim);
+  pointer-events: none;
 }
 
 #roll:active,
@@ -367,32 +710,42 @@ button:focus-visible {
 
   #war-table {
     width: 100%;
-    flex-wrap: wrap;
-    gap: 0.55rem;
-    padding: 0.7rem;
+    gap: 0.45rem;
+    padding: 0.55rem 0.7rem 0.6rem;
+    border-radius: 17px 17px 12px 12px / 13px 13px 10px 10px;
   }
 
-  .plaque {
-    flex: 1 1 42%;
-    min-width: 0;
+  #war-table::before {
+    inset: 4px;
+    border-radius: 13px 13px 8px 8px / 9px 9px 6px 6px;
   }
 
-  #roll,
-  #share {
-    flex: 1 1 calc(50% - 0.3rem);
-    min-width: 0;
-    font-size: 1rem;
-    letter-spacing: 0.14em;
-    padding: 0.75rem 0.8rem;
+  .rail-act {
+    gap: 0.45rem;
   }
 
-  #share[hidden] {
-    display: none;
+  .rail-pick {
+    padding-top: 0.6rem;
   }
 
-  #roll:only-of-type,
-  #roll:has(+ #share[hidden]) {
-    flex: 1 1 100%;
+  #roll {
+    min-height: 3.6rem;
+    padding: 0.85rem 0.6rem;
+    letter-spacing: 0.24em;
+    text-indent: 0.24em;
+    border-radius: 12px 12px 10px 10px / 10px 10px 8px 8px;
+  }
+
+  /* Both rivets in by 4px on the narrower plate, one shift for the pair. */
+  #roll::before {
+    background-position:
+      -4px 0,
+      4px 0;
+  }
+
+  .plaque select {
+    font-size: 0.8rem;
+    padding-right: 1.55rem;
   }
 
   #hort {
@@ -416,5 +769,20 @@ button:focus-visible {
 
   .hort-context {
     font-size: 0.8rem;
+  }
+}
+
+/* Under 380px three tracks are all too narrow to read. Environment -- the
+   longest label of the three -- takes a full-width row of its own above Skin
+   and Die. Two rows, no empty cells; the panel grows downward and row 1 does
+   not move. (DOM order is Environment, Skin, Die, so :first-child is the one
+   to promote.) */
+@media (max-width: 380px) {
+  .rail-pick {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .rail-pick .plaque:first-child {
+    grid-column: 1 / -1;
   }
 }

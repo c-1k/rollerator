@@ -11,6 +11,7 @@
  *   node scripts/roll-shot.mjs                 # d20 in the siege
  *   node scripts/roll-shot.mjs d6 ice          # a d6 on the glacier
  *   node scripts/roll-shot.mjs d20 hoard --idle  # no roll, just the stage
+ *   node scripts/roll-shot.mjs d20 ice --skin gold  # gold die on the glacier
  *
  * Writes .artifacts/roll-<die>-<env>.png and prints the path plus the
  * face that was rolled. Open the PNG to see the actual frame.
@@ -34,8 +35,24 @@ const ENVIRONMENTS = [
   "hoard",
 ];
 
-const positional = process.argv.slice(2).filter((a) => !a.startsWith("--"));
-const flags = new Set(process.argv.slice(2).filter((a) => a.startsWith("--")));
+const SKINS = ["auto", "iron", "wet", "bark", "stone", "ice", "lava", "gold"];
+
+/**
+ * `--skin <id>` (or `--skin=<id>`) picks the die's material independently of
+ * the environment; without it the die is whatever the environment wears, and
+ * both the behaviour and the output filename are exactly as they were.
+ */
+const argv = process.argv.slice(2);
+const positional = [];
+const flags = new Set();
+let skin = null;
+for (let i = 0; i < argv.length; i++) {
+  const arg = argv[i];
+  if (arg === "--skin") skin = argv[++i] ?? "";
+  else if (arg.startsWith("--skin=")) skin = arg.slice("--skin=".length);
+  else if (arg.startsWith("--")) flags.add(arg);
+  else positional.push(arg);
+}
 const die = positional[0] ?? "d20";
 const env = positional[1] ?? "siege";
 const idle = flags.has("--idle");
@@ -49,6 +66,10 @@ if (!ENVIRONMENTS.includes(env)) {
   console.error(
     `Unknown environment "${env}". Expected one of: ${ENVIRONMENTS.join(", ")}`,
   );
+  process.exit(1);
+}
+if (skin !== null && !SKINS.includes(skin)) {
+  console.error(`Unknown skin "${skin}". Expected one of: ${SKINS.join(", ")}`);
   process.exit(1);
 }
 
@@ -106,6 +127,21 @@ try {
   await page.locator("#roll").waitFor({ state: "visible" });
   await page.selectOption("#environment", env);
   await page.selectOption("#die", die);
+  if (skin !== null) {
+    await page.selectOption("#skin", skin);
+    // Wait for the rebuild rather than a fixed sleep: the stage reports the
+    // skin it actually built with, and "auto" resolves to the environment's
+    // own default, so the choice is what is checked in that one case.
+    await page.waitForFunction(
+      (id) => {
+        const d = window.__dice?.debug();
+        if (!d) return false;
+        return id === "auto" ? d.skinChoice === "auto" : d.skin === id;
+      },
+      skin,
+      { timeout: 60_000 },
+    );
+  }
   await page.waitForTimeout(3000);
 
   let landed = "(idle)";
@@ -117,7 +153,10 @@ try {
     await page.waitForTimeout(1200);
   }
 
-  const out = resolve(OUT_DIR, `roll-${die}-${env}${idle ? "-idle" : ""}.png`);
+  const out = resolve(
+    OUT_DIR,
+    `roll-${die}-${env}${skin ? `-${skin}` : ""}${idle ? "-idle" : ""}.png`,
+  );
   await page.screenshot({ path: out });
 
   console.log(`\n  landed: ${landed}`);

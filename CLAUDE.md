@@ -41,9 +41,11 @@ still *runs*, which is why they are written down.
 
 3. **The rest pose is the physics rest pose.** After settle, the mesh is frozen
    to the cannon-es body quaternion. The camera may dolly and the die may slide
-   to centre; its orientation may not be slerped to something camera-facing. A
-   post-settle snap is the single most tempting bug in this codebase and it
-   looks *almost* right, which is what makes it expensive.
+   to centre; its orientation may not be slerped to something camera-facing
+   *while the result is presented*. `abortRoll()` returns the die to the
+   upright idle pose only once the result is dismissed. A post-settle snap is
+   the single most tempting bug in this codebase and it looks *almost* right,
+   which is what makes it expensive.
 
 4. **A forced result is staged before the replay, never after the landing.**
    Reduced-motion and tests can force a value: simulate silently to rest, swap
@@ -54,9 +56,13 @@ still *runs*, which is why they are written down.
    (a d20's 1 is opposite its 20). Face-up rotation is baked into the texture
    layout, not corrected by a tween after the roll.
 
-6. **Cache-bust in lockstep.** `index.html` and every local import specifier
-   carry the same `?v=` token. Bump them together in one change, or the browser
-   serves you a new `app.js` against a stale `dice3d.js`.
+6. **Cache-bust the module chain in lockstep.** The tree carries three
+   independent `?v=` tokens. The *module chain* — `index.html`'s
+   `<script type="module">` plus every local import specifier in `app.js` and
+   `dice3d.js` — shares one token and must be bumped together whenever any
+   module changes, or the browser serves you a new `app.js` against a stale
+   `dice3d.js`. The stylesheet link and the media URLs in `app.js` carry their
+   own tokens; bump those only when those files change.
 
 7. **Never add a `build` script to `package.json`.** `vercel.json` pins
    framework, install and build to `null` and serves the repo root as-is.
@@ -64,11 +70,25 @@ still *runs*, which is why they are written down.
    that has nothing to build. `package.json` is also listed in `.vercelignore`
    as a second line of defence.
 
-> **In flight (2026-08-22).** The physics port described in
-> `.grok/workflows/port-dice-physics.rhai` is what brings the committed code
-> into line with invariants 2–5. Until it lands, `main` still picks the value
-> up front and asks the die to land on it. Check `git log` before assuming
-> either state.
+8. **The throw is one profile.** Every tunable lives in `THROW` in
+   `physics-roll.js`; the replay runs at 1x and interpolates between recorded
+   frames -- never scale the replay clock. The clock is wall time (capped at
+   250 ms so a backgrounded tab cannot fast-forward the throw), not the
+   render `dt`: advancing by `dt` makes the throw run in slow motion on any
+   renderer below 20 fps, which is how the old defect came back the second
+   time. `heldFrames` in `debug()` is the detector and it must read 0.
+
+> **Reveal camera (2026-08-22).** The physics port landed; the post-settle
+> yaw it carried was removed by the reveal camera —
+> `docs/superpowers/specs/2026-08-22-reveal-camera-design.md`. After the body
+> sleeps nothing writes `mesh.quaternion` while a result is presented;
+> `abortRoll()` returns the die to the upright idle pose only once the result
+> is dismissed. `revealCamera()` in `physics-roll.js` places the camera
+> instead. Two specs own this behaviour and both are live:
+> `docs/superpowers/specs/2026-08-22-reveal-camera-design.md` for the reveal,
+> and `docs/superpowers/specs/2026-08-23-hand-throw-design.md` for the hand
+> throw that feeds it -- the cylinder, the slam, the two authored hops and the
+> beat of stillness before the number. `e2e/roll.spec.js` asserts both.
 
 ## Commands
 
@@ -133,9 +153,6 @@ Stated plainly so nobody mistakes them for coverage:
 - **Pixel snapshots are skipped in CI.** Baselines are macOS-generated and CI
   renders on Linux. `e2e/chrome.spec.js` holds the structural line there;
   `e2e/snapshot.spec.js` explains how to enable both platforms.
-- **No test asserts the rendered face matches the reported one.** That needs a
-  small hook out of `dice3d.js` exposing the landed face, which is deferred
-  until the physics port settles. Until then, `pnpm shot` and your eyes.
 - **There is no `docs/architecture.md` yet.** Deliberately deferred: the roll
   pipeline is being rewritten, and a description of it written today would be
   wrong on arrival.
